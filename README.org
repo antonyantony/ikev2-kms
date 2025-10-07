@@ -1,0 +1,26 @@
+IKEv2 GKMS
+
+This is the working area for the Independent Internet-Draft, *IKEv2 GKMS*
+
+Contributions can be made by creating pull requests.
+The GitHub interface supports creating pull requests using the Edit (✏) button.
+
+* Latest Copy
+The latest version of the draft in HTML format is at:
+- [[https://antonyantony.github.io/ikev2-kms/draft-antony-ipsecme-ikev2-group-key-distribution-latest.html][Editor's Copy]]
+# above URL is replaced by .github/workflows/generate.yaml
+# sed -i "s|klassert.github.io/eesp-ikev2|$USERNAME.github.io/$REPO_NAME|g"
+
+* Command Line Usage
+
+Formatted text,HTML and xml versions of the draft can be built using *make*.
+
+#+BEGIN_SRC sh
+$ make
+ls -l draft/*-latest*
+#+END_SRC
+
+Command line usage requires that you have the necessary software installed. A
+local copy of emcas, which is used by the *make*. You are free to use an editor
+of your choice.  Alternatively "make DOCKER=yes" which will pull Docker instance
+and build txt,xml, and html page using the Docker instance.
