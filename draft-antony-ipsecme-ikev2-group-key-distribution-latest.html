@@ -1370,13 +1370,16 @@ performed under the authority of the GKMS.<a href="#section-abstract-1" class="p
                 <p id="section-toc.1-1.6.2.2.1"><a href="#section-6.2" class="auto internal xref">6.2</a>.  <a href="#name-remove-group-members" class="internal xref">Remove group members</a></p>
 </li>
               <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.3">
-                <p id="section-toc.1-1.6.2.3.1"><a href="#section-6.3" class="auto internal xref">6.3</a>.  <a href="#name-rekey" class="internal xref">Rekey</a></p>
+                <p id="section-toc.1-1.6.2.3.1"><a href="#section-6.3" class="auto internal xref">6.3</a>.  <a href="#name-time-based-rekey" class="internal xref">Time-Based Rekey</a></p>
 </li>
               <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.4">
-                <p id="section-toc.1-1.6.2.4.1"><a href="#section-6.4" class="auto internal xref">6.4</a>.  <a href="#name-adding-a-new-member" class="internal xref">Adding a new member:</a></p>
+                <p id="section-toc.1-1.6.2.4.1"><a href="#section-6.4" class="auto internal xref">6.4</a>.  <a href="#name-packet-based-rekey" class="internal xref">Packet-Based Rekey</a></p>
 </li>
               <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.5">
-                <p id="section-toc.1-1.6.2.5.1"><a href="#section-6.5" class="auto internal xref">6.5</a>.  <a href="#name-gkms-redundancy" class="internal xref">GKMS Redundancy</a></p>
+                <p id="section-toc.1-1.6.2.5.1"><a href="#section-6.5" class="auto internal xref">6.5</a>.  <a href="#name-adding-a-new-member" class="internal xref">Adding a new member:</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.6">
+                <p id="section-toc.1-1.6.2.6.1"><a href="#section-6.6" class="auto internal xref">6.6</a>.  <a href="#name-gkms-redundancy" class="internal xref">GKMS Redundancy</a></p>
 </li>
             </ul>
 </li>
@@ -1574,38 +1577,69 @@ re-generated and distributed.<a href="#section-6.1-1" class="pilcrow">¶</a></p>
         <h3 id="name-remove-group-members">
 <a href="#section-6.2" class="section-number selfRef">6.2. </a><a href="#name-remove-group-members" class="section-name selfRef">Remove group members</a>
         </h3>
-<p id="section-6.2-1">To remove nodes, IPsec peers from a group, the GKMS would send
-around a new Group Key to the current members. The current members
-MUST immediately derive a new key  ESP key using this new Group Key.
-With the Group Key this becomes a local operations. No need to contact
-the nodes.<a href="#section-6.2-1" class="pilcrow">¶</a></p>
+<p id="section-6.2-1">When one or more IPsec peers are removed from the group by the Group
+Key Management Server (GKMS), the GKMS generates and distributes a new
+Group Key to all remaining authorized members. Upon receiving the new
+Group Key, each node MUST promptly derive updated ESP keys following
+the specified key derivation procedure. This process effectively
+revokes access for the removed peers, as they do not possess the new
+keying material. The previous keys MAY remain valid for a brief
+transition period to allow for synchronized rekeying.<a href="#section-6.2-1" class="pilcrow">¶</a></p>
+<p id="section-6.2-2">[AA Note: An atomic rekey mechanism may be required to prevent
+race conditions during key transitions. In such a model, the GKMS
+would first distribute the new Group Key to all, or most, members and
+then send an atomic “activation” message indicating the time or event when the
+new key becomes active. This prevents scenarios where one node (e.g.,
+Alice) begins transmitting with the new key before another peer (e.g.,
+Bob) has received it, thereby maintaining synchronization across all
+group members.]<a href="#section-6.2-2" class="pilcrow">¶</a></p>
 </section>
 <section id="section-6.3">
-        <h3 id="name-rekey">
-<a href="#section-6.3" class="section-number selfRef">6.3. </a><a href="#name-rekey" class="section-name selfRef">Rekey</a>
+        <h3 id="name-time-based-rekey">
+<a href="#section-6.3" class="section-number selfRef">6.3. </a><a href="#name-time-based-rekey" class="section-name selfRef">Time-Based Rekey</a>
         </h3>
-<p id="section-6.3-1">This operation is similar to removing members. The GKMS send a new key
-to all nodes. The nodes would derive new keys.<a href="#section-6.3-1" class="pilcrow">¶</a></p>
+<p id="section-6.3-1">Time-based rekeying operates in a manner similar to member removal.
+At predefined intervals, the GKMS generates a new group key and
+securely distributes it to all active nodes. Upon receipt of the
+new keying material, each node derives the
+updated pairwise keys as specified by the group key derivation
+procedure. This mechanism ensures forward secrecy over time and limits
+the cryptoperiod of any given key without requiring disruption of
+existing group associations.<a href="#section-6.3-1" class="pilcrow">¶</a></p>
 </section>
 <section id="section-6.4">
-        <h3 id="name-adding-a-new-member">
-<a href="#section-6.4" class="section-number selfRef">6.4. </a><a href="#name-adding-a-new-member" class="section-name selfRef">Adding a new member:</a>
+        <h3 id="name-packet-based-rekey">
+<a href="#section-6.4" class="section-number selfRef">6.4. </a><a href="#name-packet-based-rekey" class="section-name selfRef">Packet-Based Rekey</a>
         </h3>
-<p id="section-6.4-1">When adding new member the GKMS would share the current Group Key
-with the new Group member.<a href="#section-6.4-1" class="pilcrow">¶</a></p>
+<p id="section-6.4-1">In the packet-based rekey model, the GKMS does not maintain counters
+for cryptographic operations, such as the number of packets processed
+or bytes protected by a given Security Association (SA). Instead, this
+mechanism is triggered locally by IPsec peers when a usage threshold
+is reached. The peer detecting the threshold condition initiates the
+rekey process, typically corresponding to the most active SA. This
+approach allows rekeying to occur dynamically based on traffic volume,
+providing an adaptive balance between security requirements and
+operational efficiency.<a href="#section-6.4-1" class="pilcrow">¶</a></p>
 </section>
 <section id="section-6.5">
-        <h3 id="name-gkms-redundancy">
-<a href="#section-6.5" class="section-number selfRef">6.5. </a><a href="#name-gkms-redundancy" class="section-name selfRef">GKMS Redundancy</a>
+        <h3 id="name-adding-a-new-member">
+<a href="#section-6.5" class="section-number selfRef">6.5. </a><a href="#name-adding-a-new-member" class="section-name selfRef">Adding a new member:</a>
         </h3>
-<p id="section-6.5-1">The GKMS service within an administrative domain may be deployed in a
+<p id="section-6.5-1">When adding new member the GKMS would share the current Group Key
+with the new Group member.<a href="#section-6.5-1" class="pilcrow">¶</a></p>
+</section>
+<section id="section-6.6">
+        <h3 id="name-gkms-redundancy">
+<a href="#section-6.6" class="section-number selfRef">6.6. </a><a href="#name-gkms-redundancy" class="section-name selfRef">GKMS Redundancy</a>
+        </h3>
+<p id="section-6.6-1">The GKMS service within an administrative domain may be deployed in a
 redundant configuration to enhance both scalability and availability.
 Multiple GKMS instances can operate in parallel, enabling load
 distribution and fault tolerance. To maintain consistent cryptographic
 state across the domain, all GKMS instances MUST share the same set of
 Group Keys and associated management information. This ensures that
 any node can securely obtain or refresh keying material from any
-available GKMS without disruption to established security associations.<a href="#section-6.5-1" class="pilcrow">¶</a></p>
+available GKMS without disruption to established security associations.<a href="#section-6.6-1" class="pilcrow">¶</a></p>
 </section>
 </section>
 <section id="section-7">

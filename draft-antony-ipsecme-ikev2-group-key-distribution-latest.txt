@@ -75,24 +75,25 @@ Table of Contents
    3.  Usecase . . . . . . . . . . . . . . . . . . . . . . . . . . .   3
      3.1.  Notes . . . . . . . . . . . . . . . . . . . . . . . . . .   4
      3.2.  Limitations of Full Mesh IKE Keying . . . . . . . . . . .   4
-   4.  DH or Key Exchange to Derive Keys . . . . . . . . . . . . . .   5
+   4.  DH or Key Exchange to Derive Keys . . . . . . . . . . . . . .   4
    5.  Symetric key wrapped in node Public Key . . . . . . . . . . .   5
    6.  Group Key Management Server . . . . . . . . . . . . . . . . .   5
      6.1.  Group Key . . . . . . . . . . . . . . . . . . . . . . . .   5
-     6.2.  Remove group members  . . . . . . . . . . . . . . . . . .   6
-     6.3.  Rekey . . . . . . . . . . . . . . . . . . . . . . . . . .   6
-     6.4.  Adding a new member:  . . . . . . . . . . . . . . . . . .   6
-     6.5.  GKMS Redundancy . . . . . . . . . . . . . . . . . . . . .   6
-   7.  Node  . . . . . . . . . . . . . . . . . . . . . . . . . . . .   6
-     7.1.  Memory estimations  . . . . . . . . . . . . . . . . . . .   6
-     7.2.  Scaling of messages . . . . . . . . . . . . . . . . . . .   6
-   8.  Operational Considerations  . . . . . . . . . . . . . . . . .   6
+     6.2.  Remove group members  . . . . . . . . . . . . . . . . . .   5
+     6.3.  Time-Based Rekey  . . . . . . . . . . . . . . . . . . . .   6
+     6.4.  Packet-Based Rekey  . . . . . . . . . . . . . . . . . . .   6
+     6.5.  Adding a new member:  . . . . . . . . . . . . . . . . . .   6
+     6.6.  GKMS Redundancy . . . . . . . . . . . . . . . . . . . . .   6
+   7.  Node  . . . . . . . . . . . . . . . . . . . . . . . . . . . .   7
+     7.1.  Memory estimations  . . . . . . . . . . . . . . . . . . .   7
+     7.2.  Scaling of messages . . . . . . . . . . . . . . . . . . .   7
+   8.  Operational Considerations  . . . . . . . . . . . . . . . . .   7
    9.  Acknowledgments . . . . . . . . . . . . . . . . . . . . . . .   7
    10. Security Considerations . . . . . . . . . . . . . . . . . . .   7
    11. Normative References  . . . . . . . . . . . . . . . . . . . .   7
-   12. Informative References  . . . . . . . . . . . . . . . . . . .   7
-   Appendix A.  Additional Stuff . . . . . . . . . . . . . . . . . .   8
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .   8
+   12. Informative References  . . . . . . . . . . . . . . . . . . .   8
+   Appendix A.  Additional Stuff . . . . . . . . . . . . . . . . . .   9
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .   9
 
 1.  Introduction
 
@@ -103,9 +104,8 @@ Table of Contents
    these communications, the IPsec Encapsulating Security Payload (ESP),
    [RFC4303], can be employed.
 
-   In this architecture, a Group Key Management Server (GKMS) functions
-   as a trusted authority responsible for authenticating participating
-   nodes and facilitating the derivation of cryptographic material
+
+
 
 
 
@@ -114,6 +114,9 @@ Antony & Klassert         Expires 11 April 2026                 [Page 2]
 Internet-Draft           IKEv2 Key Distribution             October 2025
 
 
+   In this architecture, a Group Key Management Server (GKMS) functions
+   as a trusted authority responsible for authenticating participating
+   nodes and facilitating the derivation of cryptographic material
    within the group.  Each node enrolls with the GKMS to obtain
    credentials and authorization for secure participation in the group
    communication framework.
@@ -156,12 +159,9 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    confidentiality, limits the scope of key compromise, and allows
    scalable group operation.
 
-
-
-
-
-
-
+   Similar use cases can be found in large-scale distributed systems
+   such as Google [PSP] and [Falcon], as well as [UEC-TSS], which employ
+   similar concepts in the context of key derivation and key
 
 
 
@@ -170,9 +170,6 @@ Antony & Klassert         Expires 11 April 2026                 [Page 3]
 Internet-Draft           IKEv2 Key Distribution             October 2025
 
 
-   Similar use cases can be found in large-scale distributed systems
-   such as Google [PSP] and [Falcon], as well as [UEC-TSS], which employ
-   similar concepts in the context of key derivation and key
    distribution without replicating full IKE exchanges between every
    pair of nodes.  Additionally, [I-D.ietf-ipsecme-eesp] has highlighted
    scenarios where IKE is used solely for key derivation within data
@@ -215,9 +212,12 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    density network environments.  When there is node removed from from
    the group some one has to announce that and update the group.
 
+4.  DH or Key Exchange to Derive Keys
 
-
-
+   When one node, for example Alice, wishes to communicate securely with
+   another node, Bob, using IPsec and ESP over IPv4 or IPv6, Alice sends
+   a request to the Group Key Management Server (GKMS).  The GKMS
+   proxies the message to Bob and relays Bob’s response back to Alice.
 
 
 
@@ -225,13 +225,6 @@ Antony & Klassert         Expires 11 April 2026                 [Page 4]
 
 Internet-Draft           IKEv2 Key Distribution             October 2025
 
-
-4.  DH or Key Exchange to Derive Keys
-
-   When one node, for example Alice, wishes to communicate securely with
-   another node, Bob, using IPsec and ESP over IPv4 or IPv6, Alice sends
-   a request to the Group Key Management Server (GKMS).  The GKMS
-   proxies the message to Bob and relays Bob’s response back to Alice.
 
    Nodes Alice and Bob perform a Diffie-Hellman (DH) a.k.a Key
    Exchange(KE), as defined in [RFC7296], deriving symmetric keying
@@ -270,9 +263,16 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    current members of the group.  When GKMS remove a any members Group
    Keys must be re-generated and distributed.
 
+6.2.  Remove group members
 
-
-
+   When one or more IPsec peers are removed from the group by the Group
+   Key Management Server (GKMS), the GKMS generates and distributes a
+   new Group Key to all remaining authorized members.  Upon receiving
+   the new Group Key, each node MUST promptly derive updated ESP keys
+   following the specified key derivation procedure.  This process
+   effectively revokes access for the removed peers, as they do not
+   possess the new keying material.  The previous keys MAY remain valid
+   for a brief transition period to allow for synchronized rekeying.
 
 
 
@@ -282,25 +282,44 @@ Antony & Klassert         Expires 11 April 2026                 [Page 5]
 Internet-Draft           IKEv2 Key Distribution             October 2025
 
 
-6.2.  Remove group members
+   [AA Note: An atomic rekey mechanism may be required to prevent race
+   conditions during key transitions.  In such a model, the GKMS would
+   first distribute the new Group Key to all, or most, members and then
+   send an atomic “activation” message indicating the time or event when
+   the new key becomes active.  This prevents scenarios where one node
+   (e.g., Alice) begins transmitting with the new key before another
+   peer (e.g., Bob) has received it, thereby maintaining synchronization
+   across all group members.]
 
-   To remove nodes, IPsec peers from a group, the GKMS would send around
-   a new Group Key to the current members.  The current members MUST
-   immediately derive a new key ESP key using this new Group Key. With
-   the Group Key this becomes a local operations.  No need to contact
-   the nodes.
+6.3.  Time-Based Rekey
 
-6.3.  Rekey
+   Time-based rekeying operates in a manner similar to member removal.
+   At predefined intervals, the GKMS generates a new group key and
+   securely distributes it to all active nodes.  Upon receipt of the new
+   keying material, each node derives the updated pairwise keys as
+   specified by the group key derivation procedure.  This mechanism
+   ensures forward secrecy over time and limits the cryptoperiod of any
+   given key without requiring disruption of existing group
+   associations.
 
-   This operation is similar to removing members.  The GKMS send a new
-   key to all nodes.  The nodes would derive new keys.
+6.4.  Packet-Based Rekey
 
-6.4.  Adding a new member:
+   In the packet-based rekey model, the GKMS does not maintain counters
+   for cryptographic operations, such as the number of packets processed
+   or bytes protected by a given Security Association (SA).  Instead,
+   this mechanism is triggered locally by IPsec peers when a usage
+   threshold is reached.  The peer detecting the threshold condition
+   initiates the rekey process, typically corresponding to the most
+   active SA.  This approach allows rekeying to occur dynamically based
+   on traffic volume, providing an adaptive balance between security
+   requirements and operational efficiency.
+
+6.5.  Adding a new member:
 
    When adding new member the GKMS would share the current Group Key
    with the new Group member.
 
-6.5.  GKMS Redundancy
+6.6.  GKMS Redundancy
 
    The GKMS service within an administrative domain may be deployed in a
    redundant configuration to enhance both scalability and availability.
@@ -311,6 +330,13 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    This ensures that any node can securely obtain or refresh keying
    material from any available GKMS without disruption to established
    security associations.
+
+
+
+Antony & Klassert         Expires 11 April 2026                 [Page 6]
+
+Internet-Draft           IKEv2 Key Distribution             October 2025
+
 
 7.  Node
 
@@ -330,13 +356,6 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    Message scalability for large number of nodes in the group think of
    thousands to possibly millions of nodes.  Number of messages
    exchanges to derive unique key.
-
-
-
-Antony & Klassert         Expires 11 April 2026                 [Page 6]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
 9.  Acknowledgments
 
@@ -366,6 +385,15 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               (IKEv2)", STD 79, RFC 7296, DOI 10.17487/RFC7296, October
               2014, <https://www.rfc-editor.org/info/rfc7296>.
 
+
+
+
+
+Antony & Klassert         Expires 11 April 2026                 [Page 7]
+
+Internet-Draft           IKEv2 Key Distribution             October 2025
+
+
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/info/rfc8174>.
@@ -383,16 +411,6 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               Internet-Draft, draft-ietf-ipsecme-eesp-01, 3 July 2025,
               <https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-
               eesp-01>.
-
-
-
-
-
-
-Antony & Klassert         Expires 11 April 2026                 [Page 7]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
    [I-D.ietf-ipsecme-g-ikev2]
               Smyslov, V. and B. Weis, "Group Key Management using
@@ -423,6 +441,15 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               <https://cloud.google.com/kms/docs/key-
               wrapping#rsaes_oaep_sha_1_2_aes_kwp>.
 
+
+
+
+
+Antony & Klassert         Expires 11 April 2026                 [Page 8]
+
+Internet-Draft           IKEv2 Key Distribution             October 2025
+
+
    [UEC-TSS]  Ultra Ethernet Consortium, "Ultra Ethernet Specification
               v1.0.1", <https://ultraethernet.org/wp-
               content/uploads/sites/20/2025/10/UE-Specification-
@@ -445,4 +472,33 @@ Authors' Addresses
 
 
 
-Antony & Klassert         Expires 11 April 2026                 [Page 8]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 11 April 2026                 [Page 9]
