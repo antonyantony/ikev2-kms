@@ -300,7 +300,7 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    specified by the group key derivation procedure.  This mechanism
    ensures forward secrecy over time and limits the cryptoperiod of any
    given key without requiring disruption of existing group
-   associations.
+   associations.  The GKMS may keep track of SA estiablished time.
 
 6.4.  Packet-Based Rekey
 
