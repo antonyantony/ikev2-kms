@@ -1,0 +1,280 @@
+
+
+
+
+IP Security Maintenance and Extensions                         A. Antony
+Internet-Draft                                               S. Klassert
+Intended status: Standards Track                                 secunet
+Expires: 10 April 2026                                    7 October 2025
+
+
+           IKEv2 Scalable Group key distribution : PSP Group
+            draft-ietf-antony-ikev2-psp-grup-distribution-01
+
+Abstract
+
+
+   This document explores and specify a symetric key distribution among
+   members of large group via a Group Key Management server.  Group
+   members use unique encryption keys to Here the group members
+   communction is one to one.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 10 April 2026.
+
+Copyright Notice
+
+   Copyright (c) 2025 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+
+
+
+Antony & Klassert         Expires 10 April 2026                 [Page 1]
+
+Internet-Draft         IKEv2 PSP Key distribution           October 2025
+
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+     1.1.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   2
+   2.  Requirements Language . . . . . . . . . . . . . . . . . . . .   2
+   3.  Usecase . . . . . . . . . . . . . . . . . . . . . . . . . . .   2
+     3.1.  Why not each node directly  . . . . . . . . . . . . . . .   3
+   4.  Operational Considerations  . . . . . . . . . . . . . . . . .   3
+   5.  Acknowledgments . . . . . . . . . . . . . . . . . . . . . . .   3
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .   3
+   7.  Normative References  . . . . . . . . . . . . . . . . . . . .   3
+   Appendix A.  Additional Stuff . . . . . . . . . . . . . . . . . .   4
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .   4
+
+1.  Introduction
+
+   AI ML worker nodes that part of one group, and has group server which
+   can authenticate these servers.  Each pair of nodes MUST use a unique
+   pair of keys for ESP.  While the key s derived exchanging messages
+   via group server.
+
+1.1.  Terminology
+
+   This document uses the following terms defined in [RFC4301]:
+   Encapsulating Security Payload (ESP), Security Association (SA),
+   Security Policy Database (SPD).
+
+   This document uses the following terms defined in [RFC9347]: AGGFRAG
+   tunnel.
+
+   This document uses the following terms defined in [RFC7110]: Return
+   Path Specified LSP Ping
+
+2.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174]when, and only when, they appear in all
+   capitals, as shown here.
+
+3.  Usecase
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 10 April 2026                 [Page 2]
+
+Internet-Draft         IKEv2 PSP Key distribution           October 2025
+
+
+3.1.  Why not each node directly
+
+   If each node has to communicate directly every other node this would
+   lead to each node have maintain N-1 connections for control traffic,
+   i.e. IKE states, as well as the nodes would need it's identity, such
+   as certificates.
+
+4.  Operational Considerations
+
+   Message scalability for large number of nodes in the group think of
+   thousands to possibily millions of nodes.  Number of messages
+   exchanges to derive unique key.
+
+5.  Acknowledgments
+
+   ACKs TBD
+
+6.  Security Considerations
+
+   TBD
+
+7.  Normative References
+
+   [AGGFRAG]  IANA, "ESP AGGFRAG_PAYLOAD Registry",
+              <https://www.iana.org/assignments/esp-aggfrag-payload/esp-
+              aggfrag-payload.xhtml>.
+
+   [I-D.colitti-ipsecme-esp-ping]
+              Colitti, L., Linkova, J., and M. Richardson, "ESP Echo
+              Protocol", Work in Progress, Internet-Draft, draft-
+              colitti-ipsecme-esp-ping-03, 7 November 2024,
+              <https://datatracker.ietf.org/doc/html/draft-colitti-
+              ipsecme-esp-ping-03>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC2827]  Ferguson, P. and D. Senie, "Network Ingress Filtering:
+              Defeating Denial of Service Attacks which employ IP Source
+              Address Spoofing", BCP 38, RFC 2827, DOI 10.17487/RFC2827,
+              May 2000, <https://www.rfc-editor.org/info/rfc2827>.
+
+   [RFC4301]  Kent, S. and K. Seo, "Security Architecture for the
+              Internet Protocol", RFC 4301, DOI 10.17487/RFC4301,
+              December 2005, <https://www.rfc-editor.org/info/rfc4301>.
+
+
+
+
+Antony & Klassert         Expires 10 April 2026                 [Page 3]
+
+Internet-Draft         IKEv2 PSP Key distribution           October 2025
+
+
+   [RFC4303]  Kent, S., "IP Encapsulating Security Payload (ESP)",
+              RFC 4303, DOI 10.17487/RFC4303, December 2005,
+              <https://www.rfc-editor.org/info/rfc4303>.
+
+   [RFC7110]  Chen, M., Cao, W., Ning, S., Jounay, F., and S. Delord,
+              "Return Path Specified Label Switched Path (LSP) Ping",
+              RFC 7110, DOI 10.17487/RFC7110, January 2014,
+              <https://www.rfc-editor.org/info/rfc7110>.
+
+   [RFC7296]  Kaufman, C., Hoffman, P., Nir, Y., Eronen, P., and T.
+              Kivinen, "Internet Key Exchange Protocol Version 2
+              (IKEv2)", STD 79, RFC 7296, DOI 10.17487/RFC7296, October
+              2014, <https://www.rfc-editor.org/info/rfc7296>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+   [RFC8194]  Schoenwaelder, J. and V. Bajpai, "A YANG Data Model for
+              LMAP Measurement Agents", RFC 8194, DOI 10.17487/RFC8194,
+              August 2017, <https://www.rfc-editor.org/info/rfc8194>.
+
+   [RFC9347]  Hopps, C., "Aggregation and Fragmentation Mode for
+              Encapsulating Security Payload (ESP) and Its Use for IP
+              Traffic Flow Security (IP-TFS)", RFC 9347,
+              DOI 10.17487/RFC9347, January 2023,
+              <https://www.rfc-editor.org/info/rfc9347>.
+
+   [RFC9611]  Antony, A., Brunner, T., Klassert, S., and P. Wouters,
+              "Internet Key Exchange Protocol Version 2 (IKEv2) Support
+              for Per-Resource Child Security Associations (SAs)",
+              RFC 9611, DOI 10.17487/RFC9611, July 2024,
+              <https://www.rfc-editor.org/info/rfc9611>.
+
+   [STATUSNOTIFY]
+              IANA, "IKEv2 Notify Message Status Types",
+              <https://www.iana.org/assignments/ikev2-parameters/
+              ikev2-parameters.xhtml#ikev2-parameters-16>.
+
+Appendix A.  Additional Stuff
+
+   TBD
+
+Authors' Addresses
+
+   Antony Antony
+   secunet Security Networks AG
+   Email: antony.antony@secunet.com
+
+
+
+Antony & Klassert         Expires 10 April 2026                 [Page 4]
+
+Internet-Draft         IKEv2 PSP Key distribution           October 2025
+
+
+   Steffen Klassert
+   secunet Security Networks AG
+   Email: steffen.klassert@secunet.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 10 April 2026                 [Page 5]
