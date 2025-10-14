@@ -79,6 +79,18 @@ nodes can introduce significant overhead. Instead, the node can
 delegate the SA deletion responsibility to the GKMS, reducing
 control-plane complexity and improving operational efficiency.
 
+** Using Group Keys for ESP Sessions
+One proposal is to relax the requirement for unique keys and permit
+all nodes to use a common key for ESP sessions. This can be achieved
+by setting the peer-to-peer key component to zero, resulting in the
+final ESP key being derived solely from the Group Key provided by
+the GKMS. An additional alternative is to allow for a mixed model,
+where some nodes insist on unique key generation for their
+communications, while other nodes default to the group key. Although
+this approach is not currently favored, it is described here to
+support further discussion and exploration of the related security
+and operational trade-off in [[I-D.xia-ipsecme-eesp-stateless-encryption]]
+
 ** Terminology
 
 This document uses the following terms defined in [[RFC4301]]:
