@@ -164,7 +164,6 @@ from the group some one has to announce that and update the group.
 
 
 * DH or Key Exchange to Derive Keys
-
 When one node, for example Alice, wishes to communicate securely with
 another node, Bob, using IPsec and ESP over IPv4 or IPv6, Alice sends a
 request to the Group Key Management Server (GKMS). The GKMS proxies
@@ -282,8 +281,17 @@ and removal group member the node would have store 4 * Keys.
 |----------------------------------------------+------------------------------+---------------+
 
 ** Scaling of messages
-Each pair of node need one Round Trip Time to derive keys.
-While the IKEv2 and ESP parameters are choosen by the GKMS server.
+Each pair of nodes requires one Round-Trip Time (RTT) to derive the
+necessary keys, while the IKEv2 and ESP parameters are chosen by the
+GKMS server.
+
+In IPv6 environments, most nodes support multicast, which can be used
+by the GKMS to distribute group messages to all nodes simultaneously.
+Each node MUST acknowledge the receipt of such messages via a unicast
+response to the GKMS.  This approach can improve convergence time
+during rekeying operations or when deleting individual Security
+Associations (SAs).
+
 
 * Node deleting SA
 
