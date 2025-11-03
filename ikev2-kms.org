@@ -309,6 +309,26 @@ their corresponding SPIs to the GKMS, which then coordinates sending
 Delete messages to each peer. This centralization streamlines control
 plane operations and reduces overhead for individual nodes.
 
+* Editors Notes Open Issues
+
+** Traffic Selectors with Multiple Network Interfaces
+Hosts equipped with multiple Network Interface Cards (NICs) and IP
+addresses require a pair of Traffic Selectors (TSi/TSr) for each
+interface, effectively for each IPsec endpoint.  Negotiating
+additional paths using the IKEv2 Mobility and Multihoming Protocol
+(MOBIKE) [[RFC4555]] or IKE SA Cloning [[RFC7791]] introduces
+significant overhead in terms of IKE message exchanges. Adding a new
+interface typically requires three or more IKEv2 exchanges per new
+endpoint.w
+
+However, in GKMS scenario, no new IKE SA is established for each additional
+interface; instead, additional Traffic Selectors are negotiated for
+each new network interface.
+
+The GKMS proposed in this document has a global view of all network
+interfaces on a node and can act as a proxy to negotiate additional
+Traffic Selectors and IP endpoints on behalf of the host.
+
 * Operational Considerations
 
 Message scalability for large number of nodes in the group think of
