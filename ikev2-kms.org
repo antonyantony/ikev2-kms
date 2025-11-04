@@ -24,7 +24,7 @@
 
 #+begin_abstract
 This document specifies method for IPsec key derivation and
-distribution within large groups using an extended Internet Key Exchange
+distribution within large group using an extended Internet Key Exchange
 Protocol Version 2 (IKEv2). A Group Key Management Server (GKMS)
 provisions both a shared group key and proxy messages between nodes
 to derive pairwise keys pair unique to IPsec peers, enabling use of
@@ -355,6 +355,8 @@ TBD
 * Informative References
 
 ** RFC9420
+** RFC4555
+** RFC7791
 ** I-D.xia-ipsecme-eesp-stateless-encryption
 ** I-D.ietf-ipsecme-g-ikev2
 ** I-D.ietf-ipsecme-eesp
