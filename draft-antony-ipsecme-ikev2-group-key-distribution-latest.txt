@@ -5,7 +5,7 @@
 IP Security Maintenance and Extensions                         A. Antony
 Internet-Draft                                               S. Klassert
 Intended status: Standards Track                                 secunet
-Expires: 17 April 2026                                   14 October 2025
+Expires: 8 May 2026                                      4 November 2025
 
 
                  IKEv2 Scalable Group Key Distribution
@@ -14,7 +14,7 @@ Expires: 17 April 2026                                   14 October 2025
 Abstract
 
    This document specifies method for IPsec key derivation and
-   distribution within large groups using an extended Internet Key
+   distribution within large group using an extended Internet Key
    Exchange Protocol Version 2 (IKEv2).  A Group Key Management Server
    (GKMS) provisions both a shared group key and proxy messages between
    nodes to derive pairwise keys pair unique to IPsec peers, enabling
@@ -43,7 +43,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 17 April 2026.
+   This Internet-Draft will expire on 8 May 2026.
 
 Copyright Notice
 
@@ -53,9 +53,9 @@ Copyright Notice
 
 
 
-Antony & Klassert         Expires 17 April 2026                 [Page 1]
+Antony & Klassert          Expires 8 May 2026                   [Page 1]
 
-Internet-Draft           IKEv2 Key Distribution             October 2025
+Internet-Draft           IKEv2 Key Distribution            November 2025
 
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -69,33 +69,50 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
 
 Table of Contents
 
-   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
      1.1.  Using Group Keys for ESP Sessions . . . . . . . . . . . .   3
-     1.2.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.2.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   4
    2.  Requirements Language . . . . . . . . . . . . . . . . . . . .   4
    3.  Usecase . . . . . . . . . . . . . . . . . . . . . . . . . . .   4
-     3.1.  Notes . . . . . . . . . . . . . . . . . . . . . . . . . .   4
+     3.1.  Notes . . . . . . . . . . . . . . . . . . . . . . . . . .   5
      3.2.  Limitations of Full Mesh IKE Keying . . . . . . . . . . .   5
    4.  DH or Key Exchange to Derive Keys . . . . . . . . . . . . . .   5
-   5.  Symetric key wrapped in node Public Key . . . . . . . . . . .   5
+   5.  Symetric key wrapped in node Public Key . . . . . . . . . . .   6
    6.  Group Key Management Server . . . . . . . . . . . . . . . . .   6
      6.1.  Group Key . . . . . . . . . . . . . . . . . . . . . . . .   6
      6.2.  Remove group members  . . . . . . . . . . . . . . . . . .   6
-     6.3.  Time-Based Rekey  . . . . . . . . . . . . . . . . . . . .   6
+     6.3.  Time-Based Rekey  . . . . . . . . . . . . . . . . . . . .   7
      6.4.  Packet-Based Rekey  . . . . . . . . . . . . . . . . . . .   7
      6.5.  Adding a new member:  . . . . . . . . . . . . . . . . . .   7
      6.6.  GKMS Redundancy . . . . . . . . . . . . . . . . . . . . .   7
    7.  Node  . . . . . . . . . . . . . . . . . . . . . . . . . . . .   7
-     7.1.  Memory estimations  . . . . . . . . . . . . . . . . . . .   7
+     7.1.  Memory estimations  . . . . . . . . . . . . . . . . . . .   8
      7.2.  Scaling of messages . . . . . . . . . . . . . . . . . . .   8
-   8.  Node deleting SA  . . . . . . . . . . . . . . . . . . . . . .   8
-   9.  Operational Considerations  . . . . . . . . . . . . . . . . .   9
-   10. Acknowledgments . . . . . . . . . . . . . . . . . . . . . . .   9
-   11. Security Considerations . . . . . . . . . . . . . . . . . . .   9
-   12. Normative References  . . . . . . . . . . . . . . . . . . . .   9
-   13. Informative References  . . . . . . . . . . . . . . . . . . .   9
+   8.  Node deleting SA  . . . . . . . . . . . . . . . . . . . . . .   9
+   9.  Editors Notes Open Issues . . . . . . . . . . . . . . . . . .   9
+     9.1.  Traffic Selectors with Multiple Network Interfaces  . . .   9
+   10. Operational Considerations  . . . . . . . . . . . . . . . . .   9
+   11. Acknowledgments . . . . . . . . . . . . . . . . . . . . . . .   9
+   12. Security Considerations . . . . . . . . . . . . . . . . . . .  10
+   13. Normative References  . . . . . . . . . . . . . . . . . . . .  10
+   14. Informative References  . . . . . . . . . . . . . . . . . . .  10
    Appendix A.  Additional Stuff . . . . . . . . . . . . . . . . . .  11
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  11
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  12
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 2]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
 
 1.  Introduction
 
@@ -105,14 +122,6 @@ Table of Contents
    data over IP networks.  To ensure confidentiality and integrity of
    these communications, the IPsec Encapsulating Security Payload (ESP),
    [RFC4303], can be employed.
-
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 2]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
    In this architecture, a Group Key Management Server (GKMS) functions
    as a trusted authority responsible for authenticating participating
@@ -153,6 +162,14 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    GKMS.  An additional alternative is to allow for a mixed model, where
    some nodes insist on unique key generation for their communications,
    while other nodes default to the group key.  Although this approach
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 3]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
+
    is not currently favored, it is described here to support further
    discussion and exploration of the related security and operational
    trade-off in [I-D.xia-ipsecme-eesp-stateless-encryption]
@@ -162,13 +179,6 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    This document uses the following terms defined in [RFC4301]:
    Encapsulating Security Payload (ESP), Security Association (SA),
    Security Policy Database (SPD).
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 3]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
 2.  Requirements Language
 
@@ -208,6 +218,14 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    operational need to periodically refresh the derivation material,
    except in cases of explicit rekeying or membership change events.
 
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 4]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
+
 3.1.  Notes
 
    [I-D.ietf-ipsecme-g-ikev2] provides similar functionality, but is
@@ -218,14 +236,6 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    Controller/Key Server (GCKS) retains all cryptographic keys in a
    single location.  This concentration of key material introduces a
    significant vulnerability, as compromise of the GCKS could expose the
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 4]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
-
    entire group’s secure communications.  G-IKEv2 use symmetric key
    wrapping I guess more than one peer has the same keys?
 
@@ -259,6 +269,19 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    encryption, providing both scalability and strong key separation
    properties.
 
+
+
+
+
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 5]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
+
 5.  Symetric key wrapped in node Public Key
 
    An early consideration was to use a key wrapping mechanism, such as
@@ -274,13 +297,6 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    A node would use same key to IPsec with every other node.  The GKMS
    would cache the node key and hand out.  One disadvantages the ESP key
    is per node and not per node pair.
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 5]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
 6.  Group Key Management Server
 
@@ -313,6 +329,15 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    (e.g., Bob) has received it, thereby maintaining synchronization
    across all group members.]
 
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 6]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
+
 6.3.  Time-Based Rekey
 
    Time-based rekeying operates in a manner similar to member removal.
@@ -323,20 +348,6 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    ensures forward secrecy over time and limits the cryptoperiod of any
    given key without requiring disruption of existing group
    associations.  The GKMS may keep track of SA estiablished time.
-
-
-
-
-
-
-
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 6]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
 6.4.  Packet-Based Rekey
 
@@ -372,27 +383,22 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
 
 7.  Node
 
+
+
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 7]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
+
 7.1.  Memory estimations
 
    Each IPsec Peer which would like to send and receive ESP would have
    save 2 * N Keys minimum, for uninterrupted messages during Rekey and
    removal group member the node would have store 4 * Keys.
-
-
-
-
-
-
-
-
-
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 7]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
    +---------------------------------------------+---------+-----------+
    | [PSP]                                       |NIC      | un        |
@@ -421,8 +427,28 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
 
 7.2.  Scaling of messages
 
-   Each pair of node need one Round Trip Time to derive keys.  While the
-   IKEv2 and ESP parameters are choosen by the GKMS server.
+   Each pair of nodes requires one Round-Trip Time (RTT) to derive the
+   necessary keys, while the IKEv2 and ESP parameters are chosen by the
+   GKMS server.
+
+   In IPv6 environments, most nodes support multicast, which can be used
+   by the GKMS to distribute group messages to all nodes simultaneously.
+   Each node MUST acknowledge the receipt of such messages via a unicast
+   response to the GKMS.  This approach can improve convergence time
+   during rekeying operations or when deleting individual Security
+   Associations (SAs).
+
+
+
+
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 8]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
 
 8.  Node deleting SA
 
@@ -440,31 +466,51 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    messages to each peer.  This centralization streamlines control plane
    operations and reduces overhead for individual nodes.
 
+9.  Editors Notes Open Issues
 
+9.1.  Traffic Selectors with Multiple Network Interfaces
 
+   Hosts equipped with multiple Network Interface Cards (NICs) and IP
+   addresses require a pair of Traffic Selectors (TSi/TSr) for each
+   interface, effectively for each IPsec endpoint.  Negotiating
+   additional paths using the IKEv2 Mobility and Multihoming Protocol
+   (MOBIKE) [RFC4555] or IKE SA Cloning [RFC7791] introduces significant
+   overhead in terms of IKE message exchanges.  Adding a new interface
+   typically requires three or more IKEv2 exchanges per new endpoint.w
 
+   However, in GKMS scenario, no new IKE SA is established for each
+   additional interface; instead, additional Traffic Selectors are
+   negotiated for each new network interface.
 
+   The GKMS proposed in this document has a global view of all network
+   interfaces on a node and can act as a proxy to negotiate additional
+   Traffic Selectors and IP endpoints on behalf of the host.
 
-Antony & Klassert         Expires 17 April 2026                 [Page 8]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
-
-9.  Operational Considerations
+10.  Operational Considerations
 
    Message scalability for large number of nodes in the group think of
    thousands to possibly millions of nodes.  Number of messages
    exchanges to derive unique key.
 
-10.  Acknowledgments
+11.  Acknowledgments
 
    ACKs TBD
 
-11.  Security Considerations
+
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                   [Page 9]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
+
+12.  Security Considerations
 
    TBD
 
-12.  Normative References
+13.  Normative References
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
@@ -494,17 +540,7 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               Version 2 (IKEv2)", RFC 9370, DOI 10.17487/RFC9370, May
               2023, <https://www.rfc-editor.org/info/rfc9370>.
 
-13.  Informative References
-
-
-
-
-
-
-Antony & Klassert         Expires 17 April 2026                 [Page 9]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
+14.  Informative References
 
    [Falcon]   Google, "Google Falcon",
               <https://netdevconf.info/0x18/docs/netdev-0x18-paper43-
@@ -514,9 +550,17 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    [I-D.ietf-ipsecme-eesp]
               Klassert, S., Antony, A., and C. Hopps, "Enhanced
               Encapsulating Security Payload (EESP)", Work in Progress,
-              Internet-Draft, draft-ietf-ipsecme-eesp-01, 3 July 2025,
-              <https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-
-              eesp-01>.
+              Internet-Draft, draft-ietf-ipsecme-eesp-02, 19 October
+              2025, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              ipsecme-eesp-02>.
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                  [Page 10]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
 
    [I-D.ietf-ipsecme-g-ikev2]
               Smyslov, V. and B. Weis, "Group Key Management using
@@ -529,13 +573,22 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               Xia, L. and W. Jiang, "Stateless Encryption Scheme of
               Enhanced Encapsulating Security Payload (EESP)", Work in
               Progress, Internet-Draft, draft-xia-ipsecme-eesp-
-              stateless-encryption-01, 6 July 2025,
+              stateless-encryption-02, 20 October 2025,
               <https://datatracker.ietf.org/doc/html/draft-xia-ipsecme-
-              eesp-stateless-encryption-01>.
+              eesp-stateless-encryption-02>.
 
    [PSP]      Google, "PSP Architecture Specification",
               <https://github.com/google/psp/blob/main/doc/
               PSP_Arch_Spec.pdf>.
+
+   [RFC4555]  Eronen, P., "IKEv2 Mobility and Multihoming Protocol
+              (MOBIKE)", RFC 4555, DOI 10.17487/RFC4555, June 2006,
+              <https://www.rfc-editor.org/info/rfc4555>.
+
+   [RFC7791]  Migault, D., Ed. and V. Smyslov, "Cloning the IKE Security
+              Association in the Internet Key Exchange Protocol Version
+              2 (IKEv2)", RFC 7791, DOI 10.17487/RFC7791, March 2016,
+              <https://www.rfc-editor.org/info/rfc7791>.
 
    [RFC9420]  Barnes, R., Beurdouche, B., Robert, R., Millican, J.,
               Omara, E., and K. Cohn-Gordon, "The Messaging Layer
@@ -552,19 +605,18 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               content/uploads/sites/20/2025/10/UE-Specification-
               1.0.1.pdf>.
 
-
-
-
-
-
-Antony & Klassert         Expires 17 April 2026                [Page 10]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
-
 Appendix A.  Additional Stuff
 
    TBD
+
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                  [Page 11]
+
+Internet-Draft           IKEv2 Key Distribution            November 2025
+
 
 Authors' Addresses
 
@@ -613,4 +665,8 @@ Authors' Addresses
 
 
 
-Antony & Klassert         Expires 17 April 2026                [Page 11]
+
+
+
+
+Antony & Klassert          Expires 8 May 2026                  [Page 12]
