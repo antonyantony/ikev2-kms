@@ -11,8 +11,8 @@
 #+RFC_XML_VERSION: 3
 #+RFC_CONSENSUS: true
 
-#+TITLE: IKEv2 Scalable Group Key Distribution
-#+RFC_SHORT_TITLE: IKEv2 Key Distribution
+#+TITLE: IKEv2 Group-Assisted Pairwise Key Establishment
+#+RFC_SHORT_TITLE: IKEv2 Group-Assisted Key Establishment
 #+AUTHOR: Antony Antony
 #+EMAIL: antony.antony@secunet.com
 #+AFFILIATION: secunet Security Networks AG
@@ -25,18 +25,20 @@
 #+begin_abstract
 This document specifies a method for deriving and distributing IPsec
 Encapsulating Security Payload (ESP) keys within large groups using an
-extended Internet Key Exchange Protocol Version 2 (IKEv2).  A Group Key
-Management Server (GKMS) acts as a trusted authority that
-authenticates nodes and coordinates key derivation.  The GKMS holds a
-group key that is distributed to all current group members and also
-proxies messages between pairs of nodes to derive unique pairwise
-session keys via a Diffie-Hellman (DH) exchange.  The final ESP key
-for each pair is derived by combining the group key and the pairwise
-key using an XOR operation; only the two communicating nodes possess
-both inputs, so only they can derive the ESP key.  This approach
+extension to Internet Key Exchange Protocol Version 2 (IKEv2).  A Group
+Key Management Server (GKMS) acts as a trusted authority that
+authenticates nodes, distributes group state, and coordinates pairwise
+key derivation.  The GKMS holds a group key that is distributed to all
+current group members and also relays key-exchange messages between
+pairs of nodes so they can derive a unique ESP traffic key from a
+Diffie-Hellman (DH) exchange.  The final ESP traffic keying material
+for each pair is derived using HKDF [[RFC5869]] with the DH shared
+secret as the input keying material, the group key as the HKDF salt,
+and peer SPIs and nonces as context.  Only the two communicating nodes
+know both inputs, so only they can derive the resulting ESP keys.  This approach
 reduces the number of IKEv2 control-plane states on each node to O(1)
 relative to group size, supports dynamic group membership, and allows
-the GKMS to centrally manage certain control-plane operations such as
+the GKMS to coordinate certain control-plane operations such as
 Security Association (SA) deletion and rekeying.
 #+end_abstract
 
@@ -53,18 +55,20 @@ confidentiality and integrity of these communications, IPsec ESP
 
 In the architecture described in this document, a single trusted
 server called the Group Key Management Server (GKMS) authenticates
-each node and coordinates cryptographic key derivation.  Each node
-enrolls with the GKMS and receives credentials that authorize its
+each node, distributes group policy, authorizes which pairs of nodes
+may establish SAs, and coordinates cryptographic key derivation.  Each
+node enrolls with the GKMS and receives credentials that authorize its
 participation in the group.
 
 Each pair of communicating nodes independently derives a unique
-pairwise encryption key.  This is achieved through a DH exchange
-[[RFC7296]] that is proxied by the GKMS, so nodes do not need a direct
-IKEv2 channel with each other.  The final ESP session key is computed
-as the XOR of two components: (1) the long-lived pairwise key derived
-from the DH exchange and (2) the group key distributed by the GKMS.
-Because each node in a pair independently contributes to the DH
-exchange, the GKMS cannot act as a man in the middle.
+ESP traffic key.  This is achieved through a DH exchange [[RFC7296]] whose
+messages are relayed by the GKMS, so nodes do not need a direct IKEv2
+transport association with each other.  The final ESP traffic keying
+material is then derived from two inputs: (1) the DH shared secret S
+produced by the DH exchange and (2) the group key distributed by the
+GKMS.  Because each node in a pair independently contributes to the
+DH exchange, the GKMS does not learn the shared secret and therefore
+cannot derive the ESP keys.
 
 An IPsec peer MAY delegate certain IKEv2 control-plane functions to
 the GKMS.  For example, deletion of an ESP Security Association (SA)
@@ -75,20 +79,27 @@ rekeying when group membership changes.
 
 ** Comparison with Shared Group Keys
 
-As an optional operational mode, a deployment MAY choose to relax the
-requirement for unique pairwise keys and permit all group members to
-share a single ESP encryption key.  This is achieved by setting the
-pairwise key component to zero, so that the final ESP key equals the
-group key distributed by the GKMS.  A mixed mode, where some node pairs
-use unique pairwise keys while others use the group key, is also
-possible but is NOT the preferred mode and is described only for
-completeness.  See [[I-D.xia-ipsecme-eesp-stateless-encryption]] for a
-discussion of the related security and operational trade-offs.
+Each pairwise key derivation exchange contributes a fresh DH shared
+secret S to the ESP traffic key derivation.  This provides cryptographic
+pairwise separation: even if one node in a pair is compromised, the
+Group Key shared with all other nodes is not immediately exposed.
+
+As a simplified operational variant, a deployment MAY choose to forgo
+the DH-derived pairwise contribution and derive ESP traffic keying
+material using an empty IKM input to the HKDF, so that the resulting
+ESP traffic keying material depends only on the Group Key and the
+other HKDF context inputs.  In this mode, compromise of any single node
+exposes the Group Key and thus removes pairwise cryptographic
+separation.  See [[I-D.xia-ipsecme-eesp-stateless-encryption]] for a
+discussion of the related security and operational trade-offs.  A
+mixed mode, where some node pairs use DH-derived keys while others use
+only the Group Key, is also possible but is not the preferred mode
+and is described only for completeness.
 
 ** Limitations of Full-Mesh IKE Keying
 
 If every node were to establish a direct IKEv2 SA with every other
-node, each participant would need to maintain N−1 control-plane SAs,
+node, each participant would need to maintain N-1 control-plane SAs,
 along with all associated state such as certificates, nonces, and
 traffic selectors.  This full-mesh approach does not scale to large
 deployments: the number of SAs grows quadratically with group size, and
@@ -126,21 +137,60 @@ Group Key Management Server (GKMS)::
   A trusted server that authenticates group members, distributes a
   group key, and facilitates pairwise key derivation between members.
   The GKMS may be deployed with one or more redundant instances that
-  share the same cryptographic state.
+  share the same cryptographic state.  In the context of [[RFC9838]],
+  the GKMS acts as a Group Controller/Key Server (GCKS).
 
 Group Key::
   A random key generated by the GKMS and distributed to all current
   members of a group.  The group key is re-generated and re-distributed
-  whenever membership changes.
+  whenever membership changes.  It serves as the HKDF salt for deriving
+  ESP traffic keying material (see [[#exchange-structure][Exchange Structure]])
+  and as the Traffic Encryption Key (TEK) in the G-IKEv2 sense
+  [[RFC9838]].
 
-Pairwise Key::
-  A long-lived symmetric key derived exclusively by a pair of
-  communicating nodes through a DH exchange that is proxied by the
-  GKMS.  The GKMS does not learn the pairwise key.
+DH Shared Secret (S)::
+  A transient symmetric secret produced by a DH exchange between a
+  pair of communicating nodes, proxied by the GKMS.  The GKMS does not
+  learn S.  S is used as the input keying material (IKM) for deriving
+  the ESP traffic key during initial SA establishment and for the
+  verification token HMAC.  S is discarded after the ESP SA is
+  established and the verification tokens have been exchanged and
+  validated.  Subsequent ESP key updates use key chaining as described
+  in [[#group-key-rekey-and-key-chaining][Group Key Rekey and Key Chaining]].  This
+  design ensures that no long-lived DH-derived secret persists on the
+  node after verification completes.
 
-Composite ESP Key::
-  The key material used for ESP encryption and decryption.  It is
-  computed as the XOR of the Group Key and the Pairwise Key.
+Transaction ID::
+  A 16-octet opaque identifier chosen by the initiator for exactly one
+  outstanding GKMS-coordinated pairwise-key transaction within a
+  group.  The same Transaction ID is carried unchanged in every
+  GKMS_KEY_REQUEST, GKMS_KEY_RESPONSE, and GKMS_VERIFY message that
+  belongs to that transaction.
+
+ESP Traffic Keying Material::
+  The key material used for ESP encryption and decryption.  At initial
+  SA establishment, it is derived from the DH Shared Secret S and the
+  Group Key using HKDF [[RFC5869]] with the Group Key as the salt and
+  S as the IKM.  The derivation is bound to the SA via the ordered node
+  identities, ESP SPIs, and nonces of the two peers (see
+  [[#exchange-structure][Exchange Structure]]).  After the ESP SA is established,
+  S is discarded and subsequent ESP keys are derived by key chaining
+  (see [[#group-key-rekey-and-key-chaining][Group Key Rekey and Key Chaining]]).
+
+Verification Token::
+  A token carried in GKMS_VERIFY and derived from the DH Shared Secret
+  S and relayed DH inputs in order to detect tampering with the
+  GKMS-relayed exchange.
+
+Node::
+  A group member in the context of this document.  Equivalent to a
+  Group Member (GM) as defined in [[RFC9838]].
+
+GKMS-Based Pairwise Key Establishment::
+  The protocol defined in this document for establishing pairwise ESP
+  keys between two nodes, coordinated by the GKMS but executed without
+  the GKMS learning the resulting ESP traffic key.  This is distinct from
+  G-IKEv2 group key distribution [[RFC9838]].
 
 * Overview of the Protocol
 
@@ -150,109 +200,819 @@ The system consists of three logical components:
 
 1. The Group Key Management Server (GKMS).
 2. Enrolled group members (called "nodes" in this document).
-3. An IP network that carries both data traffic (ESP) and the IKEv2
-   control messages that are proxied through the GKMS.
+3. An IP network that carries both data traffic (ESP) and the IKEv2-
+   based control messages that are exchanged with, and relayed by, the
+   GKMS.
 
 Nodes authenticate to the GKMS during enrollment and obtain any
-necessary credentials.  The GKMS distributes the current Group Key to
-each enrolled node.  When two nodes wish to establish an ESP SA, they
-perform a DH exchange [[RFC7296]] with each other's messages relayed
-by the GKMS.  Each node independently computes the same Pairwise Key
-from the DH output.  Finally, each node computes the Composite ESP
-Key as:
+necessary credentials.  The GKMS distributes the current Group Key and
+the group security policy to each enrolled node.  That policy includes
+at least which peers may establish SAs with each other, the permitted
+DH groups, and the permitted ESP transforms.  When two nodes wish to
+establish an ESP SA, they perform a DH exchange [[RFC7296]] with each
+other's messages relayed by the GKMS.  Each node independently
+computes the same DH Shared Secret S from the DH output and derives
+the ESP traffic keying material as defined in [[#exchange-structure][Exchange Structure]].
+Finally, each node
 
-: Composite ESP Key = Group Key XOR Pairwise Key
+The GKMS is therefore policy-authoritative for pair formation and
+cryptographic policy, but it does not participate in the DH
+computation and cannot derive either the DH Shared Secret or the
+resulting ESP traffic keying material.
 
-The GKMS does not participate in the DH computation and therefore
-cannot derive either the Pairwise Key or the Composite ESP Key.
+The GKMS fulfills the role of a Group Controller/Key Server (GCKS)
+as defined in [[RFC9838]].  Group enrollment and Group Key distribution
+use the G-IKEv2 protocol [[RFC9838]] (GSA_AUTH and GSA_INBAND_REKEY
+exchanges), while GKMS-specific pairwise key establishment is defined
+in this document.  Both mechanisms share the same IKE SA established
+between a node and the GKMS.
+
+** Node Enrollment and Group Key Distribution
+:PROPERTIES:
+:CUSTOM_ID: enrollment
+:END:
+
+Node enrollment and the initial Group Key distribution follow
+G-IKEv2 [[RFC9838]].  A node performs the GSA_AUTH exchange
+(Section 2.3.1 of [[RFC9838]]) with the GKMS: after IKE_SA_INIT,
+the GSA_AUTH exchange authenticates the node, authorizes it as a
+Group Member (GM) in the group identified by IDg, and delivers the
+current Group Key and group security policy via the Key Download (KD)
+payload.  The group security policy distributed by the GKMS in the
+GSA_AUTH response includes the permitted ESP crypto suites, the
+ordered list of DH groups (where the first element is the preferred
+group for initiating the pairwise key exchange), and any traffic
+selectors.
+
+Once enrolled, the node possesses:
+
+- A valid IKE SA with the GKMS.
+- The current Group Key.
+- The group security policy.
+- Authorization to participate in pairwise key derivation exchanges
+  with other enrolled nodes.
+
+Subsequent re-enrollment to additional groups, or re-enrollment within
+an existing IKE SA, uses the GSA_REGISTRATION exchange (Section 2.3.2
+of [[RFC9838]]).
+
+Note that G-IKEv2 is designed primarily for multicast group communication,
+where all group members share the same TEK.  This document extends the
+G-IKEv2 model for pairwise unicast communication: the Group Key obtained
+via G-IKEv2 serves as the HKDF salt in the pairwise key derivation
+described in [[#exchange-structure][Exchange Structure]], and does not serve
+as a direct ESP key.
 
 ** Key Derivation Exchange
 
 When node Alice wishes to communicate securely with node Bob, the
-following steps occur:
+following steps occur.
 
-1. Alice sends a GKMS_KeyRequest message to the GKMS identifying Bob.
-2. The GKMS proxies the request to Bob.
-3. Bob responds with a GKMS_KeyResponse message relayed back to Alice.
-4. Alice and Bob perform a standard IKEv2 Diffie-Hellman Key Exchange
-   [[RFC7296]] using the messages relayed in steps 2 and 3.  The KE
-   payload is conveyed in the IKE_AUTH request and response.
-5. Both Alice and Bob derive the Pairwise Key from the DH shared secret
-   using a suitable Key Derivation Function (KDF) [[RFC9370]].
-6. Both Alice and Bob independently compute:
+*** Exchange Structure
+:PROPERTIES:
+:CUSTOM_ID: exchange-structure
+:END:
 
-   Composite ESP Key = Group Key XOR Pairwise Key
+The GKMS is not a relay-only signaling component.  It is the
+authoritative source of admission and policy for a transaction.  A
+transaction is valid only if the GKMS authorizes the identified
+initiator, responder, group, DH group, and policy combination.
 
-A portion of the DH output MUST be used in the derivation of the
-Pairwise Key such that the GKMS cannot compute the Pairwise Key from
-the relayed KE payloads alone.  Specifically, the DH shared secret
-S MUST be an input to the KDF that produces the Pairwise Key; the GKMS
-never sees S.
+This specification defines an extension to IKEv2, not a reuse of base
+IKEv2 without modification.  It uses GKMS-specific Notify Message Types
+carried in authenticated and integrity-protected IKEv2 exchanges
+between each node and the GKMS.  The Notify payload header is as
+defined by [[RFC7296]] (see [[#ikev2-notify-message-types][IKEv2 Notify Message Types]]).  For the notifications defined in
+this document, the Protocol ID field MUST be set to zero and the SPI
+Size field MUST be set to zero.  All GKMS-specific fields are carried
+in the Notification Data field.
+
+This document does not redefine the base IKEv2 syntax or the semantics
+of standard IKEv2 payloads.  Instead, it defines new GKMS-specific
+notification semantics and processing rules layered on top of
+protected IKEv2 exchanges between a node and the GKMS.
+
+A single pairwise-key setup consists of the following logical
+messages:
+
+1. A = Node A to GKMS: GKMS_KEY_REQUEST
+2. B = GKMS to Node B: relayed request information for the same
+   transaction
+3. C = Node B to GKMS: GKMS_KEY_RESPONSE
+4. D = GKMS to Node A: relayed response information for the same
+   transaction
+5. E/F = GKMS_VERIFY messages in each direction carrying the
+   tamper-evidence verification tokens defined in [[#gkms-tamper-evidence-for-the-dh-exchange][GKMS Tamper-Evidence for the DH Exchange]]
+
+The protocol defined here is therefore a GKMS-coordinated two-party
+exchange.  The GKMS is on the signaling path for all messages, but the
+cryptographic contribution needed to compute the DH shared secret comes
+only from the two endpoint nodes.
+
+*** Notification Data Formats
+
+Unless otherwise noted, all multi-octet fields are encoded in network
+byte order.  Each variable-length field has an associated 16-bit
+length field, and the variable-length fields appear in the order shown
+in the corresponding notification format.  A receiver MUST reject a
+notification whose declared lengths exceed the enclosing Notification
+Data field.
+
+The Group ID, Initiator ID, Responder ID, and Policy fields are opaque
+octet strings.  Their meaning is defined by GKMS enrollment state and
+group policy, not by this wire format.
+
+The Transaction ID is a 16-octet opaque value.  The initiator of the
+transaction MUST choose a fresh Transaction ID for each new
+GKMS_KEY_REQUEST.  The same Transaction ID MUST appear unchanged in
+every GKMS_KEY_REQUEST, GKMS_KEY_RESPONSE, and GKMS_VERIFY notification
+that belongs to that transaction.  A Transaction ID is unique only
+within the scope of one initiating node and one Group ID; receivers
+MUST use that tuple, not the Transaction ID alone, for transaction
+lookup.
+
+The GKMS MUST supply a fresh value N_gkms for each successful
+GKMS_KEY_REQUEST / GKMS_KEY_RESPONSE transaction.  N_gkms is encoded as
+an opaque variable-length field and MUST be delivered unchanged to both
+endpoints.  Implementations SHOULD generate N_gkms with at least 128
+bits of entropy.
+
+GKMS_KEY_REQUEST Notification Data::
+
+   The notification data for GKMS_KEY_REQUEST is the following
+   concatenation of fixed-length and variable-length fields:
+
+   #+begin_src
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Group ID Length        |        DH Group Number       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   |                      Transaction ID                           |
+   |                        (16 octets)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          IDi Length           |          IDr Length           |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Policy Length          |           Ni Length          |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          KEi Length            |        N_gkms Length         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                         Group ID                              ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           IDi                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           IDr                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                         Policy                                ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           Ni                                  ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           KEi                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                        N_gkms                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   #+end_src
+
+   - *Group ID Length* (16 bits): Length of Group ID in octets.
+   - *DH Group Number* (16 bits): Diffie-Hellman group number for the
+     exchange, encoded as in IKEv2 [[RFC7296]].
+   - *Transaction ID* (128 bits): Opaque transaction identifier chosen
+     by the initiating GM.  The same value MUST appear in all
+     GKMS_KEY_REQUEST, GKMS_KEY_RESPONSE, and GKMS_VERIFY notifications
+     belonging to the transaction.
+   - *IDi Length* (16 bits): Length of the initiator identity, IDi, in
+     octets.
+   - *IDr Length* (16 bits): Length of the responder identity, IDr, in
+     octets.
+   - *Policy Length* (16 bits): Length of the policy field in octets.
+   - *Ni Length* (16 bits): Length of the initiator nonce Ni in octets.
+   - *KEi Length* (16 bits): Length of the initiator Diffie-Hellman
+     value KEi in octets.
+   - *N_gkms Length* (16 bits): Length of the GKMS freshness nonce
+     N_gkms in octets.
+   - *Group ID*: Opaque group identifier for the group in which the
+     transaction is performed.
+   - *IDi*: Initiator identity, using RFC 7296 notation.
+   - *IDr*: Responder identity, using RFC 7296 notation.
+   - *Policy*: Opaque policy blob selected by the GKMS for this
+     transaction.
+   - *Ni*: Initiator nonce.
+   - *KEi*: Initiator Diffie-Hellman public value.
+   - *N_gkms*: Fresh GKMS-generated nonce used to bind the relayed
+     messages belonging to the same transaction.
+
+   When a GM originates GKMS_KEY_REQUEST toward the GKMS, the
+   N_gkms Length field MUST be set to zero and no N_gkms octets are
+   present.  When the GKMS relays the request toward the responding GM,
+   it MUST insert the fresh N_gkms for that transaction and update the
+   N_gkms Length accordingly.  All other fields MUST be forwarded
+   unchanged.
+
+GKMS_KEY_RESPONSE Notification Data::
+
+   The notification data for GKMS_KEY_RESPONSE is the following
+   concatenation of fixed-length and variable-length fields:
+
+   #+begin_src
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Group ID Length        |            Status            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   |                      Transaction ID                           |
+   |                        (16 octets)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          IDr Length           |           Nr Length           |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          KEr Length            |        N_gkms Length         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                         Group ID                              ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           IDr                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           Nr                                  ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           KEr                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                        N_gkms                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   #+end_src
+
+   - *Group ID Length* (16 bits): Length of Group ID in octets.
+   - *Status* (16 bits): Response status code.
+   - *Transaction ID* (128 bits): Transaction identifier copied from
+     the corresponding GKMS_KEY_REQUEST.
+   - *IDr Length* (16 bits): Length of the responder identity, IDr, in
+     octets.
+   - *Nr Length* (16 bits): Length of the responder nonce Nr in octets.
+   - *KEr Length* (16 bits): Length of the responder Diffie-Hellman
+     value KEr in octets.
+   - *N_gkms Length* (16 bits): Length of the GKMS freshness nonce
+     N_gkms in octets.
+   - *Group ID*: Opaque group identifier.
+   - *IDr*: Responder identity, using RFC 7296 notation.
+   - *Nr*: Responder nonce.
+   - *KEr*: Responder Diffie-Hellman public value.
+   - *N_gkms*: GKMS freshness nonce copied unchanged from the relayed
+     request.
+
+   The Status field is a 16-bit status code.  Status code 0 indicates
+   success.  Any non-zero status code indicates an error.  The
+   following status codes are defined:
+
+   - 0: SUCCESS
+   - 1: POLICY_REJECTED
+   - 2: UNKNOWN_RESPONDER
+   - 3: UNSUPPORTED_DH_GROUP
+   - 4: TRANSACTION_STATE_UNAVAILABLE
+   - 5: VERIFICATION_FAILED
+
+   For Status = 0 (SUCCESS), the Nr, KEr, and N_gkms fields MUST be
+   present and non-empty.  For any non-zero Status, the Nr Length,
+   KEr Length, and N_gkms Length fields MUST be set to zero and the
+   corresponding octet strings MUST be absent.  The Group ID,
+   Transaction ID, and IDr fields MUST still be present so that the
+   initiator can identify the failed transaction.
+
+GKMS_VERIFY Notification Data::
+
+   The notification data for GKMS_VERIFY is the following concatenation
+   of fixed-length and variable-length fields:
+
+   #+begin_src
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Group ID Length        |         Token Length         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   |                      Transaction ID                           |
+   |                        (16 octets)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                         Group ID                              ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                          Token                                ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   #+end_src
+
+   - *Group ID Length* (16 bits): Length of Group ID in octets.
+   - *Token Length* (16 bits): Length of Token in octets.
+   - *Transaction ID* (128 bits): Transaction identifier copied from
+     the corresponding GKMS_KEY_REQUEST.
+   - *Group ID*: Opaque group identifier.
+   - *Token*: Opaque verification token for tamper-evidence, as
+     specified in [[#gkms-tamper-evidence-for-the-dh-exchange][GKMS Tamper-Evidence for the DH Exchange]].
+
+   The token construction differs depending on whether the sender is the
+   original initiator or the original responder (Token_i vs Token_r as
+   defined in [[#gkms-tamper-evidence-for-the-dh-exchange][GKMS Tamper-Evidence for the DH Exchange]]).
+   The recipient determines which token is expected based on the
+   transaction context and the direction of the GKMS_VERIFY message.
+   The token is carried as an opaque octet string whose length is
+   determined by the verification construction.
+
+*** GKMS_KEY_REFRESH_REQUEST Notification Data
+:PROPERTIES:
+:CUSTOM_ID: gkms-key-refresh-request
+:END:
+
+A node MAY request pairwise key refresh by sending GKMS_KEY_REFRESH_REQUEST
+to the GKMS over the established IKE SA.  The node is responsible for
+selecting the refresh interval; the GKMS does not schedule or coordinate
+pairwise key refresh for multiple pairs simultaneously.
+
+The notification data format is:
+
+#+begin_src
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +---------------------------------------------------------------+
+   |         Group ID Length        |       Responder ID Length     |
+   +---------------------------------------------------------------+
+   |                                                               |
+   ~                         Group ID                              ~
+   |                                                               |
+   +---------------------------------------------------------------+
+   |                                                               |
+   ~                       Responder ID                            ~
+   |                                                               |
+   +---------------------------------------------------------------+
+   #+end_src
+
+- *Group ID Length* (16 bits): Length of Group ID in octets.
+- *Responder ID Length* (16 bits): Length of Responder ID in octets.
+- *Group ID*: Opaque group identifier.
+- *Responder ID*: Identity of the peer with whom pairwise key refresh
+  is desired.
+
+Upon receiving GKMS_KEY_REFRESH_REQUEST, the GKMS MUST verify that the
+requester is authorized for the indicated group and that the named
+Responder ID is a valid group member.  If both checks pass, the GKMS
+SHOULD relay the request by forwarding a GKMS_KEY_REFRESH_RESPONSE
+notification to the Responder as described below.  The GKMS MAY deny
+the request if the pair is not authorized under current group policy.
+
+*** GKMS_KEY_REFRESH_RESPONSE Notification Data
+:PROPERTIES:
+:CUSTOM_ID: gkms-key-refresh-response
+:END:
+
+The GKMS sends GKMS_KEY_REFRESH_RESPONSE to the Responder to inform it
+that a pairwise key refresh is desired with a specified Initiator.
+
+The notification data format is:
+
+#+begin_src
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +---------------------------------------------------------------+
+   |         Group ID Length        |      Initiator ID Length      |
+   +---------------------------------------------------------------+
+   |                                                               |
+   ~                         Group ID                              ~
+   |                                                               |
+   +---------------------------------------------------------------+
+   |                                                               |
+   ~                       Initiator ID                            ~
+   |                                                               |
+   +---------------------------------------------------------------+
+   #+end_src
+
+- *Group ID Length* (16 bits): Length of Group ID in octets.
+- *Initiator ID Length* (16 bits): Length of Initiator ID in octets.
+- *Group ID*: Opaque group identifier.
+- *Initiator ID*: Identity of the node that requested the refresh.
+
+Upon receiving GKMS_KEY_REFRESH_RESPONSE, the Responder MUST verify
+that the Initiator ID is a valid group member.  If verification succeeds,
+the Responder MUST initiate a GKMS_KEY_REQUEST toward the GKMS,
+carrying its Ni and KEr for the refresh exchange.  The exchange proceeds
+as described in [[#exchange-structure][Exchange Structure]].
+
+*** Processing Rules
+
+
+The initiator MUST select the target responder and a DH group that is
+permitted by the current GKMS policy for the group.  If the responder
+cannot support the indicated policy, it MUST reject the transaction and
+the GKMS MUST report that failure to the initiator.
+
+The initiator MUST generate a fresh Transaction ID for each new
+GKMS_KEY_REQUEST and MUST NOT reuse the same Transaction ID for a
+different outstanding transaction in the same group.  If an initiator
+retransmits a request because no response has been received, it MUST
+reuse the same Transaction ID and the same request contents.
+
+Upon receiving GKMS_KEY_REQUEST from the initiator, the GKMS MUST:
+
+1. Verify that the request is well formed.
+2. Verify that the initiator is authorized for the identified group.
+3. Verify that the responder identity names a valid group member.
+4. Verify that the requested DH group and policy are permitted.
+5. Allocate or recover transaction state for the Transaction ID.
+6. Generate a fresh N_gkms if this is the first valid request for that
+   transaction.
+7. Relay the request to the responder, inserting N_gkms and otherwise
+   preserving the request fields.
+
+If the GKMS receives a malformed GKMS_KEY_REQUEST, it MUST reject the
+request using the normal IKEv2 error handling of the protected exchange
+with the sender, for example INVALID_SYNTAX [[RFC7296]].  If the GKMS
+cannot or will not continue a well-formed transaction, it MUST report
+the failure to the initiator using GKMS_KEY_RESPONSE with a non-zero
+error status code.
+
+If the GKMS receives a second GKMS_KEY_REQUEST with the same Group ID,
+same initiator, and same Transaction ID, it MUST treat the request as a
+retransmission only if all other request fields are identical to the
+stored transaction state.  If the contents differ, the GKMS MUST reject
+the request and MUST NOT merge the two transactions.
+
+Upon receiving GKMS_KEY_REQUEST from the GKMS, the responder MUST
+verify that the Group ID, Initiator ID, Responder ID, DH group, and
+N_gkms are present and acceptable before using KEi.  If the responder
+accepts the transaction, it MUST send GKMS_KEY_RESPONSE with Status = 0
+(SUCCESS) and include fresh Nr and KEr values.  If the responder rejects the
+transaction because of policy or local capability, it MUST send
+GKMS_KEY_RESPONSE with a non-zero error status code and without Nr,
+KEr, or N_gkms.
+
+The GKMS MUST correlate all relayed request, response, and verify
+messages belonging to the same transaction and MUST deliver them only
+to the intended peer.  The GKMS MUST NOT alter Ni, Nr, KEi, KEr, the
+selected DH group, or N_gkms while relaying a transaction.
+
+Upon receiving GKMS_KEY_RESPONSE from the responder, the GKMS MUST
+check that the Group ID, Transaction ID, and Responder ID match stored
+transaction state before relaying the response to the initiator.  For a
+successful response, the GKMS MUST also verify that the N_gkms value in
+the response matches the stored value for that transaction.
+
+Each endpoint MUST verify that the received Group ID,
+Transaction ID, peer identity, DH group, and GKMS freshness
+value are consistent across all messages in the transaction before
+using any relayed KE payload.
+
+An endpoint that receives a GKMS_KEY_RESPONSE or GKMS_VERIFY for an
+unknown transaction, or that detects inconsistent Group ID,
+Transaction ID, or
+N_gkms values, MUST abort the local transaction state.  If the endpoint
+can still identify the transaction, it SHOULD send GKMS_KEY_RESPONSE
+with Status = 4 (TRANSACTION_STATE_UNAVAILABLE) or Status = 5
+(VERIFICATION_FAILED), as appropriate, through the GKMS.
+
+Once both peers have derived ESP traffic keying material for the same
+transaction, each peer MUST either complete the tamper-evidence
+verification defined later in this section successfully or abort the
+transaction.
+
+The GKMS MUST maintain transaction state at least until it has relayed
+the final expected message for the transaction or until the transaction
+times out.  Once transaction state has been discarded, the GKMS MUST
+reject later messages for that transaction rather than attempting to
+reconstruct state from partial inputs.
+
+A GKMS implementation MUST impose a local transaction lifetime and MUST
+expire transaction state that has not completed within that lifetime.
+The exact timeout value is deployment-specific, but it MUST be long
+enough to accommodate at least one protected IKEv2 retransmission cycle
+between a node and the GKMS.  When transaction state expires, later
+GKMS_KEY_RESPONSE or GKMS_VERIFY messages for that transaction MUST be
+treated as unknown or expired and handled as described above.
+
+A node and the GKMS SHOULD maintain a replay cache for recently
+completed or failed transactions so that an immediately repeated
+message with the same {Group ID, Initiator ID, Transaction ID} tuple is
+recognized as a replay or retransmission rather than a distinct new
+transaction.  Replay-cache entries SHOULD be kept for at least one
+transaction lifetime after state discard.
+
+*** Exchange Processing
+
+1. The Initiator sends a GKMS_KEY_REQUEST to the GKMS identifying
+   the Responder and carrying the Initiator's contribution to the key
+   exchange, including fresh nonce material and any KE payload required
+   by the selected DH group.
+2. The GKMS relays the request parameters to the Responder.
+3. The Responder returns a GKMS_KEY_RESPONSE, relayed by the GKMS to
+   the Initiator, carrying the Responder's corresponding nonce material
+   and KE payload.
+4. Using the exchanged DH values, both peers compute the DH shared
+   secret S as specified by the selected group in [[RFC7296]].
+5. Both peers independently derive the ESP traffic keying material
+   directly from S:
+
+   ESP Traffic Keying Material = HKDF-SHA256(
+     Salt     = Group Key,
+     IKM      = S,
+     Info     = "GKMS-ESP" || IDi || IDr ||
+                SPIi || SPIr || Ni || Nr || N_gkms,
+     L        = L_esp)
+
+   where GroupIDLength, IDiLength, IDrLength, NiLength, NrLength, and
+   N_gkmsLength are unsigned 16-bit integers in network byte order;
+   Transaction ID is the 16-octet transaction identifier from the
+   signaling exchange; DH Group Number is the 16-bit group value from
+   GKMS_KEY_REQUEST; IDi is the Initiator ID; IDr is the Responder ID;
+   SPIi and SPIr are the ESP SPIs of the initiator and responder; and
+   Ni, Nr, and N_gkms are exactly the octet strings carried in the
+   corresponding request and response messages.  Both peers MUST use
+   the original requester as the initiator and the responding node as
+   the responder when forming these ordered inputs.  The DH shared
+   secret S MUST be the IKM input so that the GKMS cannot compute the
+   ESP traffic keying material from the relayed KE payloads alone.
+   After the ESP SA is established and the verification tokens have been
+   exchanged and validated, S is discarded and MUST be securely wiped.
+
+*** Algorithm Agility and Output Mapping
+
+The HKDF constructions in this document define a generic key schedule.
+They do not hard-code any one ESP algorithm beyond the choice of the
+underlying HKDF hash.  The amount of ESP Traffic Keying Material that
+must be extracted, denoted L_esp, is determined by the negotiated ESP
+transform set.
+
+When the selected ESP transform requires multiple traffic keys, salts,
+or other per-SA secret values, both peers MUST consume the HKDF output
+stream in the same deterministic order.  That ordering MUST be defined
+by the negotiated ESP transform specification or by the group policy
+conveyed by the GKMS, and it MUST NOT depend on local implementation
+choices.
+
+If a future revision of this specification allows a hash other than the
+one used by the negotiated HKDF, the negotiated group policy MUST
+identify the HKDF hash and the corresponding output mapping rules.
+
+*** GKMS Tamper-Evidence for the DH Exchange
+:PROPERTIES:
+:CUSTOM_ID: gkms-tamper-evidence-for-the-dh-exchange
+:END:
+
+Although the GKMS is trusted not to modify relayed DH messages, a
+compromised or buggy GKMS implementation could tamper with the proxied
+KE payloads, causing Alice and Bob to derive different DH Shared Secrets
+without immediate indication of mismatch.  To detect this, both peers
+MUST exchange a tamper-evidence Verification Token after the DH
+exchange.
+
+After both peers have computed the DH Shared Secret S and the ESP traffic
+keying material, each peer computes a tamper-evidence Verification Token:
+
+: Token_i = HMAC-<H>(
+:   S,
+:   "GKMS-DH-Verify" || "I" || IDi || IDr || KEi || KEr || N_gkms)
+: Token_r = HMAC-<H>(
+:   S,
+:   "GKMS-DH-Verify" || "R" || IDi || IDr || KEi || KEr || N_gkms)
+
+where <H> is the negotiated integrity algorithm for the IKE SA.
+Following [[RFC5869]], any HMAC construction MAY be used for both the
+token computation and the HKDF; common choices are HMAC-SHA-256,
+HMAC-SHA-384, or HMAC-SHA-512.
+
+Each peer sends its token to the other via the GKMS in GKMS_VERIFY.
+Upon receiving the peer's token, the peer verifies it matches the
+expected value.  If verification fails, the SA MUST be aborted and the
+GKMS notified.
+
+** Token Verification Process
+
+When a peer receives a GKMS_VERIFY notification containing a token
+carried in the Token field, it MUST perform the following steps to
+verify the token:
+
+1. Compute the expected token value using the stored DH Shared Secret S,
+   the ordered identity fields, the DH values, and the N_gkms value
+   received in the GKMS_KEY_REQUEST and GKMS_KEY_RESPONSE messages.
+   If the local state does not have all required values (for example,
+   if transaction state was lost), token verification MUST fail.
+
+2. Compare the received token octet string with the computed expected
+   token octet string using a constant-time comparison function.  If
+   the two octet strings differ in length or in any octet, the
+   verification fails.
+
+3. On verification failure: the peer MUST abort the transaction,
+   discard any derived key material, and SHOULD send a
+   GKMS_KEY_RESPONSE with Status = 5 (VERIFICATION_FAILED) through the
+   GKMS to inform the peer.  The peer MUST NOT install the ESP SA.
+
+4. On verification success: the peer proceeds to install the ESP SA
+   and begin using the derived traffic keying material.  Both peers
+   MUST have verified the received token before the ESP SA is used for
+   data traffic.
+
+Note that the token is computed over the DH public values as received
+in GKMS_KEY_REQUEST and GKMS_KEY_RESPONSE, before any transformation
+or hashing is applied by the ESP Traffic Keying Material derivation.
+This ensures that any tampering with the relayed KE payloads will
+result in a different token value and will be detected.
+
+The GKMS also issues a fresh nonce N_gkms in the GKMS_KEY_REQUEST and
+GKMS_KEY_RESPONSE messages.  This nonce MUST be included in the
+derivation of the ESP traffic keying material and in the verification
+tokens.  This prevents replay of key derivation messages and
+cross-transaction token substitution.  Each GKMS_KEY_REQUEST / GKMS_KEY_RESPONSE exchange MUST
+use a unique nonce; the GKMS SHOULD generate nonces with at least 128
+bits of entropy.
 
 ** Adding a New Member
+:PROPERTIES:
+:CUSTOM_ID: adding-a-new-member
+:END:
 
-When a new member joins the group, the GKMS authenticates the node,
-distributes the current Group Key, and communicates the group security
-policy.  The policy includes at minimum: the supported ESP crypto
-suites, the ordered list of DH groups (where the first element is the
-preferred group for initiating the DH exchange), and any traffic
-selectors.  The new member is then able to derive pairwise keys with
-existing members as described in the key derivation exchange above.
+When a new member joins an existing group, the GKMS authenticates the
+node using G-IKEv2.  If the node does not have a valid IKE SA with the
+GKMS, it first performs IKE_SA_INIT followed by GSA_AUTH
+(Section 2.3.1 of [[RFC9838]]), as described in
+[[#enrollment][Node Enrollment and Group Key Distribution]].  If the node
+already has a valid IKE SA with the GKMS, it uses the GSA_REGISTRATION
+exchange (Section 2.3.2 of [[RFC9838]]) to enroll in the additional
+group.  In either case, the GKMS distributes the current Group Key and
+group security policy, after which the new node can derive pairwise
+keys with existing members using the key derivation exchange defined
+in [[#exchange-structure][Exchange Structure]].
 
-** Removing a Member <<removing-a-member>>
+** Removing a Member
+:PROPERTIES:
+:CUSTOM_ID: removing-a-member
+:END:
 
 When the GKMS removes one or more members, it generates a new Group
-Key and distributes it to all remaining members.  Upon receiving the
-new Group Key, each remaining node MUST promptly re-derive all
-Composite ESP Keys using the new Group Key and the existing Pairwise
-Keys.  The removed members cannot derive the new keys because they do
-not possess the new Group Key.
+Key and distributes it to all remaining members via G-IKEv2
+GSA_INBAND_REKEY (Section 2.4.2 of [[RFC9838]]) or GSA_REKEY
+(Section 2.4.1 of [[RFC9838]]).  Upon receiving the new Group Key,
+each remaining node MUST promptly re-derive all ESP traffic keying
+material using key chaining (see [[#group-key-rekey-and-key-chaining][Group Key Rekey and Key Chaining]]).
+The removed members cannot derive the new keys because they do not
+possess the current ESP keying material.
 
 The previous Group Key MAY remain valid for a short transition period
-to allow for clock skew or delivery delays.  A node that has not yet
-received the new Group Key continues to use the previous Composite
-ESP Key; this window SHOULD be kept short to limit the rekey latency.
+to allow for delivery skew, corresponding to the Deactivation Time
+Delay (DTD) defined in [[RFC9838]].  During that period, nodes MAY
+accept both old-key and new-key traffic for the affected SAs, but they
+MUST begin originating new traffic with the replacement Group Key
+no later than the activation point defined by the GKMS.  This overlap
+window SHOULD be kept short.
 
-[NOTE: An atomic rekey mechanism may be desirable to prevent race
-conditions during membership changes.  In such a scheme, the GKMS would
-first distribute the new Group Key to all (or most) members and then
-send an atomic "activation" message indicating the time or event at
-which the new key becomes active.  This prevents one node from
-transmitting with the new key while its peer is still using the
-previous key.  The design of this mechanism requires further
-evaluation.]
+An atomic rekey mechanism may be desirable to prevent race conditions
+during membership changes.  In such a scheme, the GKMS would first
+distribute the new Group Key and then send a distinct activation signal
+indicating the time or event at which the new key becomes active, as
+controlled by the Activation Time Delay (ATD) parameter defined in
+[[RFC9838]].  The design of this mechanism requires further evaluation.
 
 ** Time-Based Rekeying
+:PROPERTIES:
+:CUSTOM_ID: time-based-rekeying
+:END:
 
 At predefined intervals, the GKMS generates a new Group Key and
-distributes it to all active nodes.  Each node re-derives its
-Composite ESP Keys as described above.  This provides forward secrecy
-over time and limits the cryptoperiod of any given key without
-disrupting established SAs.
+distributes it to all active nodes via G-IKEv2 GSA_INBAND_REKEY
+(Section 2.4.2 of [[RFC9838]]) or GSA_REKEY (Section 2.4.1 of
+[[RFC9838]]).  Each node re-derives its ESP traffic keying material
+using key chaining as described in [[#group-key-rekey-and-key-chaining][Group Key Rekey and Key Chaining]].  This provides
+forward secrecy over time and limits the cryptoperiod of any given
+key without disrupting established SAs.
+
+*** Optional Pairwise Key Refresh for Forward Secrecy
+:PROPERTIES:
+:CUSTOM_ID: optional-pairwise-key-refresh-for-forward-secrecy
+:END:
+
+Time-based rekeying replaces the Group Key, and ESP keys are updated
+by key chaining.  However, the current ESP key is not refreshed from a
+fresh DH exchange unless pairwise key refresh is explicitly triggered.
+An attacker who records all traffic and later obtains a compromised ESP
+key can decrypt all ESP traffic for which that key was used, including
+any ESP keys derived from it via key chaining (see
+[[#group-key-rekey-and-key-chaining][Group Key Rekey and Key Chaining]]).
+
+To achieve forward secrecy for the DH contribution as well, a deployment
+MAY perform periodic pairwise key refresh.  In this mode, a node
+triggers a fresh DH exchange with a peer by sending
+GKMS_KEY_REFRESH_REQUEST to the GKMS.  The GKMS relays a
+GKMS_KEY_REFRESH_RESPONSE to the peer, which then initiates a fresh
+GKMS_KEY_REQUEST / GKMS_KEY_RESPONSE exchange as described in
+[[#exchange-structure][Exchange Structure]].  A new ESP traffic key is derived
+from the fresh DH Shared Secret S' and the current Group Key; S' is
+discarded after the ESP SA is established and verified.  The old ESP
+key MUST be securely wiped.
+
+Nodes select their own refresh intervals; the GKMS does not schedule
+or coordinate pairwise key refresh across multiple pairs.  The GKMS
+MUST NOT be involved in the DH computation; it only relays the KE
+payloads as described in [[#exchange-structure][Exchange Structure]].
+
+Implementations that require strong forward secrecy SHOULD perform
+pairwise key refresh at least as frequently as required by the security
+policy of the deployed cipher suite.
+
+*** Group Key Rekey and Key Chaining
+:PROPERTIES:
+:CUSTOM_ID: group-key-rekey-and-key-chaining
+:END:
+
+After an ESP SA is established, the DH Shared Secret S is discarded.
+Subsequent updates of the ESP traffic key do not require a new DH
+exchange; instead, each node independently derives the new ESP key by
+key chaining:
+
+: ESP Traffic Keying Material_new = HKDF-SHA256(
+:   Salt     = Group Key_new,
+:   IKM      = ESP Traffic Keying Material_old,
+:   Info     = "GKMS-ESP" || IDi || IDr ||
+:              SPIi || SPIr || Ni || Nr || N_gkms || "Rekey",
+:   L        = L_esp)
+
+where the nonces Ni, Nr, and N_gkms are the original values from the
+initial SA establishment; "Rekey" is a single octet appended to the Info
+string to distinguish the rekey derivation from the initial derivation.
+The new ESP key MUST be derived before the old key is wiped.
+
+Key chaining has the following security property: if an ESP key is
+compromised after a rekey event, the compromise does not reveal the
+previous ESP key, because HKDF provides forward security in the
+IKM direction.  However, compromise of an old ESP key does allow
+derivation of subsequent ESP keys in that chain, because each new key
+uses the old key as IKM.  This is analogous to the key schedule in MLS
+[[RFC9420]], which also stores only derived leaf keys and not the
+underlying ratchet seeds.  In both designs, the one-hop exposure is
+considered an acceptable trade-off against the implementation simplicity
+of eliminating persistent DH-derived secrets.  A deployment that
+requires resistance to compromise of an ESP key followed by a rekey
+event SHOULD perform a full pairwise key refresh (a fresh DH exchange)
+before the next rekey cycle.
+
+The key-chaining derivation does not involve the GKMS; it uses only
+locally available state (the current ESP key and the new Group Key).
+The GKMS need not be aware of the rekey state of individual SAs.
+deployed cipher suite.
 
 ** Packet-Based Rekeying
 
 In the packet-based rekey model, the GKMS does not maintain packet or
 byte counters per SA.  Instead, when a node detects that an SA has
 reached a local usage threshold, it notifies the GKMS, which then
-initiates a time-based rekey cycle.  This model adapts rekey frequency
-to actual traffic volume.
+initiates the corresponding group rekey or pairwise refresh procedure.
+This model adapts rekey frequency to actual traffic volume while
+keeping per-SA traffic accounting local to the endpoints.
 
-** Delegated SA Deletion <<delegated-sa-deletion>>
+** Delegated SA Deletion
+:PROPERTIES:
+:CUSTOM_ID: delegated-sa-deletion
+:END:
 
 An IKEv2 node that wishes to terminate an SA is normally required to
 send a DeleteNotify payload [[RFC7296]] to each peer, await a
 response, and retransmit if necessary.  In a large group, performing
 this individually for each peer is expensive.
 
-A node MAY instead delegate SA deletion to the GKMS.  In this mode,
-the node sends the GKMS a list of peers and their SPIs for which
-deletion is requested.  The GKMS then coordinates the deletion
-exchange with each affected peer on behalf of the requesting node.
+A node MAY instead delegate SA deletion to the GKMS.
 
-[NOTE: The delegation protocol details, including message formats
-and error handling, are to be defined in a future revision of this
-document.]
+GKMS-Initiated Group Key Invalidation::
+  The GKMS immediately generates a new Group Key and distributes it to
+  all remaining group members.  Upon activation of the new Group Key,
+  all ESP SAs established with the removed node become unusable, because
+  the removed node does not possess the new Group Key.  This mode does
+  NOT require the GKMS to hold per-node credentials for peer-to-peer
+  IKE exchanges; it relies solely on the group rekey mechanism.
+
+The GKMS SHOULD track the outcome of deletion operations and MAY notify
+the requesting node of success or failure for each affected peer.
 
 ** GKMS Redundancy
 
@@ -263,15 +1023,121 @@ Key and any pending rekey state, so that any instance can continue
 keying operations without interruption.  A node that discovers a GKMS
 instance unreachable SHOULD attempt to contact another instance.
 
-** Using Only the Group Key for ESP
+If a deployment expects failover during active transactions, the GKMS
+instances MUST also share enough transaction state to preserve correct
+processing of outstanding {Group ID, Initiator ID, Transaction ID}
+tuples, including any stored N_gkms value and replay-cache entries.
+If such state sharing is not available, a failover target MUST reject
+later messages for unknown transactions rather than attempting to guess
+or reconstruct transaction state.  In that case, the endpoint peers
+MUST restart the transaction with a new Transaction ID.
 
-For deployments that do not require pairwise key separation, the
-Pairwise Key component MAY be set to a constant zero value.  In this
-mode, the Composite ESP Key equals the Group Key, and all group
-members share the same ESP encryption key.  This simplifies
-implementation but means that compromise of any single node exposes
-the group key used for all pairs.  Nodes that require pairwise key
-separation SHOULD NOT use this mode.
+** Group-Key-Derived Pairwise Key Mode
+:PROPERTIES:
+:CUSTOM_ID: gk-derived-pairwise-key-mode
+:END:
+
+By default, each pairwise key derivation exchange contributes a fresh
+DH shared secret S as the IKM for the ESP traffic key derivation.  For
+deployments that do not require this pairwise contribution, the IKM
+input MAY be empty.  In this mode, the ESP traffic keying material is
+derived as:
+
+: ESP Traffic Keying Material = HKDF-SHA256(
+:   Salt = Group Key,
+:   IKM  = empty,
+:   Info = "GKMS-ESP" || IDi || IDr ||
+:          SPIi || SPIr || Ni || Nr || N_gkms,
+:   L    = L_esp)
+
+This mode removes the DH-derived pairwise contribution from the key
+schedule.  It simplifies implementation but means that compromise of
+any single node exposes the Group Key used for all such SAs and thus
+removes cryptographic separation based on a secret known only to one
+pair of nodes.  Even in this mode, the derived ESP traffic keys can
+still differ across SAs because the derivation remains bound to the SA-
+specific context inputs.  Nodes that require pairwise key separation
+SHOULD NOT use this mode.
+
+** Direct Group Key Mode
+:PROPERTIES:
+:CUSTOM_ID: direct-group-key-mode
+:END:
+
+In this mode, the Group Key itself is used directly as the ESP traffic
+key for all SAs within the group.  The Group Key is distributed by the
+GKMS during enrollment and is already available to both peers; no
+per-SA key derivation is performed.
+
+The ESP traffic keying material is the Group Key itself:
+
+: ESP Traffic Keying Material = Group Key
+
+A node establishes an SA with a peer by sending a notification to the
+GKMS containing the local SPI and a fresh nonce; the GKMS forwards this
+information to the peer.  Both peers already possess the Group Key and
+can use it as the ESP key for the SA immediately.  No DH computation,
+no verification token exchange, and no per-SA key derivation is
+required.  The GKMS does not participate in the ESP key computation.
+
+This mode has the following properties:
+
+- Zero per-SA key storage: the Group Key is already present on each
+  node; no additional keys are stored per SA.
+- Single-message SA establishment: Alice notifies the GKMS; the GKMS
+  forwards the notification to Bob; both can immediately use the Group
+  Key as the ESP key.
+- Every group member can decrypt every other member's traffic: the
+  Group Key is shared with all members and provides no pairwise
+  separation whatsoever.
+
+This mode is NOT RECOMMENDED for general use.  It provides the same
+level of protection as a shared group key scheme and does not limit
+the impact of a compromised node to a single pairwise relationship.
+Cryptographic separation between pairs is eliminated entirely.
+
+Direct Group Key Mode is intended only for deployments where other
+modes are not viable, including:
+
+- Nodes with severe storage constraints that cannot store per-SA keys,
+- Very large groups where per-SA key storage is prohibitive, or
+- Environments where all group members are fully trusted and the
+  threat model is limited to protection against external attackers
+  who do not possess the Group Key.
+
+** Comparison of Key Derivation Modes
+
+The following table compares the number of messages and round trips
+required to install a new ESP SA in each mode:
+
+|--------------------+---------------------------+-------------------------------+--------------------------|
+|                    | Default DH-derived mode    | Group-Key-Derived           | Direct Group Key Mode    |
+|                    |                           | Pairwise Key Mode            |                          |
+|--------------------+---------------------------+-------------------------------+--------------------------|
+| Messages           | 2 (request + response) + | 1 message (Alice to GKMS     | 1 message (Alice to GKMS |
+|                    | 2 (verification tokens)    | forwarded to Bob)            | forwarded to Bob)        |
+| Round trips        | 2 RTT                    | 1 RTT                       | 1 RTT                   |
+| DH operations      | Required (both peers)      | None                        | None                    |
+| Verification token | Required                  | Not needed                  | Not needed              |
+| Tokens exchanged   | 2 (one each direction)    | 0                           | 0                       |
+| Per-SA key storage | 1 ESP key per unidirectional SA; | 1 ESP key per unidirectional SA; | None |
+|--------------------+---------------------------+-------------------------------+--------------------------|
+
+In the default DH-derived mode, a full DH exchange is required before
+the ESP key can be derived, followed by an exchange of tamper-evidence
+verification tokens to confirm that both peers computed the same DH
+shared secret.
+
+In the Group-Key-Derived Pairwise Key Mode, the ESP key can be derived
+after a single message from Alice to Bob through the GKMS: Alice provides
+her SPI and nonce, the GKMS appends a freshness nonce and forwards to
+Bob, and both peers immediately have all inputs needed to derive the
+ESP key from the Group Key.  No DH computation, no verification token
+exchange, and no additional handshake round trips are required.
+
+In the Direct Group Key Mode, no per-SA key derivation is performed;
+the Group Key itself is used as the ESP key.  SA establishment requires
+only a single notification message through the GKMS.
 
 ** Memory Requirements
 
@@ -281,8 +1147,17 @@ different IPsec keying approaches.  All figures assume N peer nodes.
 |------------------------------------------+---------------------------------------------|
 | Scheme                                   | Keys Stored per Node                         |
 |------------------------------------------+---------------------------------------------|
-| Full-mesh IKEv2 [[RFC7296]]              | 2 x N or 4 x N (during rekey)               |
-| GKMS (this document)                    | 4 x N (2 per pair; 2 during rekey)          |
+| Full-mesh IKEv2 [[RFC7296]]              | ~2 x (N-1) keys (IKE + Child SA per peer;  |
+|                                        | 2 per direction); ~4 x (N-1) during rekey  |
+| GKMS - Default DH-derived Mode         | 1 Group Key + 2 x M ESP Keys             |
+|                                        | (one per unidirectional SA; M = active     |
+|                                        | peer pairs; M << N)                        |
+| GKMS - Group-Key-Derived Mode          | 1 Group Key + 2 x M ESP Keys             |
+|                                        | (one per unidirectional SA; M = active     |
+|                                        | peer pairs; M << N)                        |
+| GKMS - Direct Group Key Mode           | 1 Group Key                             |
+|                                        | (same Group Key used as ESP key for all  |
+|                                        | SAs; no per-SA keys; M is irrelevant)     |
 | PSP [[PSP]]                              | 1 master key + N send keys (unspecified)     |
 | EESP stateless [[I-D.xia-ipsecme-eesp-stateless-encryption]] | 2 keys shared with group server |
 | UEC-TSS [[UEC-TSS]]                      | Unspecified                                  |
@@ -293,14 +1168,19 @@ different IPsec keying approaches.  All figures assume N peer nodes.
 ** Message Scalability
 
 Each pairwise key derivation requires one Round-Trip Time (RTT) between
-the two nodes, plus the forwarding latency through the GKMS.  The IKEv2
-and ESP cryptographic parameters are selected by the GKMS and conveyed
-to both nodes, so no negotiation round trips are needed.
+the two nodes, plus the forwarding latency through the GKMS.  For each
+transaction, the GKMS conveys the policy needed for the exchange,
+including the permitted DH groups and ESP transforms, so that the
+relayed messages can carry only the per-exchange values needed to
+derive the keys.  An implementation MUST be able to match every
+response and verification message to exactly one outstanding
+transaction.
 
-In IPv6 environments, the GKMS MAY use multicast to distribute group
-messages -- such as new or updated Group Keys -- to all nodes
-simultaneously.  Each node MUST acknowledge receipt of multicast
-messages via unicast to the GKMS.
+# STK: I don't think this text is needed here.
+# In IPv6 environments, the GKMS MAY use multicast to distribute group
+# messages -- such as new or updated Group Keys -- to all nodes
+# simultaneously.  Each node MUST acknowledge receipt of multicast
+# messages via unicast to the GKMS.
 
 ** Traffic Selectors with Multiple Network Interfaces
 
@@ -310,68 +1190,230 @@ IPsec endpoint.  In standard IKEv2, adding a new interface with
 MOBIKE [[RFC4555]] or IKE SA Cloning [[RFC7791]] requires three or
 more additional IKEv2 exchanges per new endpoint.
 
-In the GKMS model described in this document, no new IKE SA is
-established for each additional interface; instead, the GKMS
-coordinates the addition of new Traffic Selectors for the existing
-IKE SA.  The GKMS has a holistic view of all interfaces on a node and
-acts as a proxy to negotiate these additional endpoints.
+In the GKMS model described in this document, no full mesh of direct
+peer-to-peer IKE SAs is established for each additional interface.
+Instead, the GKMS coordinates any additional Traffic Selector state
+needed for the affected endpoints.  The GKMS has a holistic view of all
+interfaces on a node and can relay the information needed to bind those
+additional endpoints to the existing policy.
 
 * Security Considerations
+
+** Threat Model
+
+This protocol assumes that the GKMS is part of the trusted security
+boundary of the administrative domain.  The GKMS is trusted to:
+
+- authenticate nodes during enrollment,
+- authorize which pairs of nodes may establish SAs,
+- distribute the Group Key and current group policy, and
+- relay GKMS-coordinated control messages without unauthorized
+  modification.
+
+The GKMS is not trusted with the Diffie-Hellman shared secret and is
+not expected to derive the DH Shared Secret or the resulting ESP traffic
+keying material.  The DH Shared Secret S is used only during initial
+SA establishment and is discarded after verification.
+
+A compromised GKMS can still cause significant harm.  In particular, a
+compromised GKMS can:
+
+- authorize unwanted pair establishment,
+- deny service by dropping, delaying, or modifying relayed control
+  messages,
+- observe the communication graph of which nodes attempt to establish
+  SAs with each other,
+- distribute incorrect or malicious policy, and
+- distribute an incorrect Group Key.
+
+A compromised GKMS cannot compute the DH Shared Secret S from recorded
+control messages alone, because it does not learn the DH shared secret.
+It also cannot directly derive ESP traffic keying material without S
+or active participation by a compromised endpoint.
+
+This document does not attempt to protect against a fully compromised
+endpoint.  A compromised endpoint can reveal the Group Key or the ESP
+traffic keying material for SAs in which it participates.  The DH
+Shared Secret S is used only during initial SA establishment and
+verification and is not stored persistently.
 
 The security of this protocol relies on the following assumptions:
 
 The GKMS is trusted to correctly authenticate members, distribute
-Group Keys, and relay DH messages without modification or disclosure.
+Group Keys, and relay DH messages without unauthorized modification.
 Compromise of the GKMS allows the attacker to participate in group
-communication and to observe the Group Key but does not immediately
-reveal Pairwise Keys, because the DH exchange between nodes remains
-unobservable to the GKMS.  This property limits the blast radius of
-a GKMS compromise compared to schemes in which the key server holds
-all pairwise keys (such as G-IKEv2 [[I-D.ietf-ipsecme-g-ikev2]]).
+communication and to observe both the relayed exchange metadata and the
+Group Key, but does not immediately reveal stored ESP keys,
+because observing the relayed KE payloads is not sufficient to compute
+the ESP traffic keying material.  This property limits the blast radius
+of a GKMS compromise compared to schemes in which the key server holds all
+pairwise keys (such as G-IKEv2 [[RFC9838]]).
 
-Nodes MUST verify that their DH peer is a legitimate group member by
-validating the certificate or credential issued by the GKMS during
-enrollment.  Without this verification, a compromised GKMS could
-impersonate any member to any other.
+The ESP traffic keying material is derived using HKDF [[RFC5869]] with the
+Group Key as salt and the DH Shared Secret S as IKM during initial SA
+establishment, and by key chaining thereafter.  HKDF is used instead of
+a simple XOR to:
+
+- Limit exposure: after SA establishment, S is discarded and the
+ESP key is stored rather than the DH secret.  If the Group Key is
+compromised after a rekey event, the ESP key cannot be recovered from
+observed traffic, because HKDF is a pseudorandom function.
+- Bind the resulting keying material to the specific SA: the ordered
+  identities, SPIs, and nonces are included in the HKDF Info parameter,
+  cryptographically tying the key to the
+negotiated SA.
+- Prevent cross-SA key confusion: different SAs between the same peers
+using different nonces will derive different ESP traffic keys.
+
+The GKMS-issued nonce (N_gkms) prevents replay of key derivation
+messages.  Without this nonce, an attacker who has recorded past
+GKMS_KEY_REQUEST/GKMS_KEY_RESPONSE exchanges could replay them to cause
+both peers to re-derive the same ESP traffic key.  The nonce freshness
+requirement ensures each derivation is unique.
+
+The tamper-evidence Verification Token (HMAC over the DH
+payloads, per the negotiated integrity algorithm) ensures that if the GKMS modified any relayed KE payload,
+the two peers will derive different DH Shared Secrets and their
+Verification Tokens will mismatch, causing the SA establishment to
+abort.  The HMAC key is S itself, which only Alice and Bob
+know; the GKMS cannot forge Verification Tokens without also
+compromising S.  However, if the GKMS is fully
+compromised (i.e., also controls the Verification Token relay), it
+could suppress the mismatch by not delivering the Verification Tokens.
+Nodes SHOULD implement a timeout on Verification Token delivery and
+abort if the timeout expires, as this may indicate GKMS interference.
+
+This document does not define a separate explicit key-confirmation
+exchange for the derived ESP traffic keying material.  Such a step
+would require additional per-pair signaling whenever the Group Key is
+updated, because the ESP traffic keys depend on both S
+and the current Group Key.  The protocol intentionally avoids that
+recurring overhead and instead relies on the authenticated GKMS-to-node
+control channel for Group Key distribution, the tamper-evidence check
+for the relayed DH exchange, and normal SA failure handling if peers do
+not derive compatible ESP state.
+
+Nodes MUST verify that the peer identity carried in the relayed
+transaction is authorized for the identified group according to the
+policy and identity bindings distributed by the GKMS during enrollment.
+This document relies on the authenticated GKMS-to-node enrollment and
+policy-distribution channel for those bindings; it does not define a
+separate peer-certificate exchange within the relayed pairwise-key
+transaction.  Without such authorization checks, a compromised or buggy
+GKMS could cause a node to accept an unauthorized peer identity.
 
 Forward secrecy is provided with respect to the Group Key through
-time-based and membership-change-based rekeying.  Forward secrecy
-with respect to Pairwise Keys is achieved only when both sides perform
-a fresh DH exchange; the protocol does not provide Continuous Key
-Derivation (CKR) or Double Ratchet-style update mechanisms.
+time-based and membership-change-based rekeying using key chaining.
+Forward secrecy with respect to the DH Shared Secret is achieved only
+when both sides perform a fresh DH exchange (see
+[[#optional-pairwise-key-refresh-for-forward-secrecy][Optional Pairwise Key Refresh for Forward Secrecy]]).
+Note that the DH Shared Secret is not stored persistently; it is
+discarded after initial SA establishment and verification, so the
+ESP keys for past SAs are not derivable from any long-lived secret.
 
-The group-key-only mode (Pairwise Key set to zero) does not provide
-pairwise key separation and therefore does not limit the impact of a
-node compromise to a single pairwise relationship.
+The Group-Key-Derived Pairwise Key Mode (empty IKM, see
+[[#gk-derived-pairwise-key-mode][Group-Key-Derived Pairwise Key Mode]]) and the
+[[#direct-group-key-mode][Direct Group Key Mode]] do not provide pairwise key
+separation and therefore do not limit the impact of a node compromise to
+a single pairwise relationship.
 
-The delegated SA deletion mechanism requires the GKMS to possess
-sufficient credentials to authenticate to the removed peer.  The
-security implications of this credential sharing require further
-analysis and are noted as an open issue.
+The delegated SA deletion mechanism ([[#delegated-sa-deletion][Delegated SA Deletion]]) relies on
+group rekeying rather than on direct peer-to-peer DeleteNotify
+exchange.  This avoids giving the GKMS standing credentials to
+impersonate arbitrary nodes to their peers while still allowing prompt
+revocation of SAs involving a removed node.
 
 * Privacy Considerations
 
 The GKMS learns the identities of all communicating pairs because it
-relays the key derivation requests.  A privacy-sensitive deployment
-SHOULD use opaque or group-pseudonymous identifiers in GKMS requests
-to limit identity disclosure to the GKMS.  The DH exchange itself is
-authenticated (via credentials issued by the GKMS), so passive
-observers of the relayed KE payloads cannot identify the peers without
-also compromising the GKMS credential store.
+relays the key derivation requests.  As a result, the GKMS can observe
+at least:
 
-Nodes that use only the Group Key mode reveal their group membership
-to any observer of their ESP traffic, because all group members share
-the same ESP key.
+- which node is attempting to communicate with which other node,
+- when a new pairwise transaction is attempted,
+- how often a given pair performs refresh or rekey operations, and
+- parts of the communication graph and group structure over time.
+
+A privacy-sensitive deployment SHOULD use opaque or group-pseudonymous
+identifiers in GKMS requests to limit direct identity disclosure where
+possible.  However, even with opaque identifiers, the GKMS still
+observes transaction timing and linkage within a group.
+
+The relayed DH exchange is carried over protected GKMS-to-node control
+channels established during enrollment, so passive observers of those
+channels cannot identify the peers without also compromising the GKMS
+credential store or the protected signaling channel.
+
+Nodes that use only the Group Key mode remove the secret pairwise-key
+contribution from the ESP key schedule.  In that mode, the derived ESP
+keys may still differ across SAs because they remain bound to SA-
+specific context, but compromise of the shared Group Key affects all
+such SAs that depend on it.  More generally, any deployment that
+centralizes SA admission and rekey decisions at the GKMS trades off
+scalability and operational control against reduced privacy from the
+GKMS itself.
 
 * IANA Considerations
 
-This document requests the following actions from IANA:
+This section outlines the IANA actions expected for this protocol.
+The notification-data formats and basic transaction processing rules
+for GKMS_KEY_REQUEST, GKMS_KEY_RESPONSE, and GKMS_VERIFY are specified
+in [[#exchange-structure][Exchange Structure]].
 
-To be defined in a future revision of this document.  Expected actions
-include the creation of a new IKEv2 Notify Message Type for the
-GKMS_KeyRequest/GKMS_KeyResponse exchange and the assignment of a new
-IKEv2 exchange type or identification of the existing exchange type
-used for the proxied DH exchange.
+** IKEv2 Notify Message Types
+:PROPERTIES:
+:CUSTOM_ID: ikev2-notify-message-types
+:END:
+
+This document defines the following new IKEv2 Notify Message Types for
+IKEv2 [[RFC7296]]:
+
+|-----------------------+-----------------------------------------------|
+| Value                 | Description                                   |
+|-----------------------+-----------------------------------------------|
+| TBA1 (IANA to assign) | GKMS_KEY_REQUEST - Initiated by a node to     |
+|                       | request key derivation with another group      |
+|                       | member via the GKMS                           |
+| TBA2 (IANA to assign) | GKMS_KEY_RESPONSE - Response carrying either  |
+|                       | responder key-exchange material or an error   |
+| TBA3 (IANA to assign) | GKMS_VERIFY - Tamper-evidence token exchange |
+|                       | for a transaction                             |
+| TBA4 (IANA to assign) | GKMS_KEY_REFRESH_RESPONSE - GKMS-to-responder   |
+|                       | notification that a pairwise key refresh is       |
+|                       | requested by an Initiator for a given group      |
+| TBA5 (IANA to assign) | GKMS_KEY_REFRESH_REQUEST - Request from a     |
+|                       | node to the GKMS to initiate pairwise key      |
+|                       | refresh with a specified peer                 |
+|-----------------------+-----------------------------------------------|
+
+This document requests allocation of new IKEv2 Notify Message Type
+values for these functions.  The designated expert should ensure that
+future extensions do not redefine the Transaction ID handling or Status
+codes defined by this specification.
+
+** GKMS_KEY_RESPONSE Status Codes
+
+This document creates a new "GKMS_KEY_RESPONSE Status Codes" registry.
+Initial values are:
+
+|-------+-------------------------------|
+| Value | Name                          |
+|-------+-------------------------------|
+| 0     | SUCCESS                       |
+| 1     | POLICY_REJECTED               |
+| 2     | UNKNOWN_RESPONDER             |
+| 3     | UNSUPPORTED_DH_GROUP          |
+| 4     | TRANSACTION_STATE_UNAVAILABLE |
+| 5     | VERIFICATION_FAILED           |
+|-------+-------------------------------|
+
+New values in this registry are assigned by Standards Action.
+
+** ESP Security Association Attributes
+
+This document does not currently define new ESP Security Association
+attributes.  Future extensions may define attributes for carrying
+GKMS-specific parameters within the ESP SA.
 
 * Normative References
 
@@ -381,14 +1423,14 @@ used for the proxied DH exchange.
 ** RFC7296
 ** RFC7791
 ** RFC8174
-** RFC9370
 ** RFC4555
+** RFC5869
+** RFC9838
 
 * Informative References
 
 ** RFC9420
 ** I-D.xia-ipsecme-eesp-stateless-encryption
-** I-D.ietf-ipsecme-g-ikev2
 ** I-D.ietf-ipsecme-eesp
 ** PSP
 :PROPERTIES:
@@ -406,24 +1448,49 @@ used for the proxied DH exchange.
 :REF_TARGET: https://ultraethernet.org/wp-content/uploads/sites/20/2025/10/UE-Specification-1.0.1.pdf
 :END:
 
+* Example GKMS-Coordinated Exchange
+
+This appendix shows one successful pairwise-key transaction between
+Alice and Bob.  The example is illustrative and omits exact octet
+values.
+
+1. Alice selects Bob as the target responder, chooses a permitted DH
+   group, generates a fresh Transaction ID, Ni, and KEi, and sends
+   GKMS_KEY_REQUEST to the GKMS.
+2. The GKMS authenticates Alice, checks that Alice is authorized to
+   communicate with Bob under the current group policy, allocates
+   transaction state, generates fresh N_gkms, and relays the request
+   toward Bob with the same Transaction ID and the inserted N_gkms.
+3. Bob verifies that the Group ID, Transaction ID, Responder ID,
+   selected DH group, and N_gkms are acceptable under local policy.
+   Bob generates Nr and KEr and sends GKMS_KEY_RESPONSE with Status =
+   SUCCESS back to the GKMS.
+4. The GKMS verifies that the response matches stored transaction
+   state, including the Transaction ID and N_gkms value, and relays the
+   response to Alice.
+5. Alice and Bob compute the DH shared secret S and derive the ESP
+   traffic keying material directly from S and the Group Key as described in
+   [[#exchange-structure][Exchange Structure]].
+6. Alice computes a tamper-evidence Verification Token
+   and sends it through the GKMS in
+   GKMS_VERIFY.  Bob does the same in the reverse direction.
+7. Alice and Bob verify the received tamper-evidence tokens.  If either
+   token mismatches, both sides abort the transaction.
+8. If the tamper-evidence tokens validate, Alice and Bob install the
+   resulting ESP SA state and begin using the derived ESP Traffic
+   Keying Material for data traffic.
+9. The GKMS may discard the transaction state after the expected
+   verification messages have been relayed or after the local
+   transaction lifetime expires.
+
 * Open Issues
 
 This section records known open issues that require resolution in a
 future revision of this document.
 
-1. *Delegated SA deletion*: The protocol details for delegating SA
-   deletion to the GKMS (message formats, retransmission behavior,
-   error handling) are not yet specified.
-
-2. *Atomic rekey*: The design of an atomic rekey mechanism to prevent
-   race conditions during group membership changes is open.
-
-3. *GKMS credential for delegated deletion*: The security implications
-   of granting the GKMS credentials to send DeleteNotify messages on
-   behalf of a node need further analysis.
-
-4. *IANA registration*: All IANA registration requests are pending
-   specification of the protocol message formats in a future revision.
+1. *Atomic rekey*: The design of an atomic rekey mechanism to prevent
+   race conditions during group membership changes is open.  See the
+   note in [[#removing-a-member][Removing a Member]].
 
 * Acknowledgments
 
