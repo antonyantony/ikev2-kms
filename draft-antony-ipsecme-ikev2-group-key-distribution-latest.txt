@@ -5,28 +5,32 @@
 IP Security Maintenance and Extensions                         A. Antony
 Internet-Draft                                               S. Klassert
 Intended status: Standards Track                                 secunet
-Expires: 11 April 2026                                    8 October 2025
+Expires: 12 March 2027                                  8 September 2026
 
 
-                 IKEv2 Scalable Group Key Distribution
+            IKEv2 Group-Assisted Pairwise Key Establishment
           draft-antony-ipsecme-ikev2-group-key-distribution-01
 
 Abstract
 
-   This document specifies method for IPsec key derivation and
-   distribution within large groups using an extended Internet Key
-   Exchange Protocol Version 2 (IKEv2).  A Group Key Management Server
-   (GKMS) provisions both a shared group key and proxy messages between
-   nodes to derive pairwise keys pair unique to IPsec peers, enabling
-   use of IPsec Encapsulating Security Payload (ESP) among multiple
-   nodes.  Each communicating pair derives a session-specific encryption
-   key from two inputs: the group key provided by the GKMS and an
-   individual host-pair keys derived via IKEv2 exchange.  The final key
-   is derived by combining, XOR, these components, ensuring uniqueness
-   per pair keys only known to the IPsec peers while maintaining fewer
-   IKEv2 states on nodes, scalable state management for dynamic group
-   membership.  Node authentication is performed under the authority of
-   the GKMS.
+   This document specifies a method for deriving and distributing IPsec
+   Encapsulating Security Payload (ESP) keys within large groups using
+   an extension to Internet Key Exchange Protocol Version 2 (IKEv2).  A
+   Group Key Management Server (GKMS) acts as a trusted authority that
+   authenticates nodes, distributes group state, and coordinates
+   pairwise key derivation.  The GKMS holds a group key that is
+   distributed to all current group members and also relays key-exchange
+   messages between pairs of nodes so they can derive a unique ESP
+   traffic key from a Diffie-Hellman (DH) exchange.  The final ESP
+   traffic keying material for each pair is derived using HKDF [RFC5869]
+   with the DH shared secret as the input keying material, the group key
+   as the HKDF salt, and peer SPIs and nonces as context.  Only the two
+   communicating nodes know both inputs, so only they can derive the
+   resulting ESP keys.  This approach reduces the number of IKEv2
+   control-plane states on each node to O(1) relative to group size,
+   supports dynamic group membership, and allows the GKMS to coordinate
+   certain control-plane operations such as Security Association (SA)
+   deletion and rekeying.
 
 Status of This Memo
 
@@ -43,20 +47,21 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 11 April 2026.
+   This Internet-Draft will expire on 12 March 2027.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                 [Page 1]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
-
-
-
-
-Antony & Klassert         Expires 11 April 2026                 [Page 1]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
 
    This document is subject to BCP 78 and the IETF Trust's Legal
    Provisions Relating to IETF Documents (https://trustee.ietf.org/
@@ -69,284 +74,1852 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
 
 Table of Contents
 
-   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
-     1.1.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   3
-   2.  Requirements Language . . . . . . . . . . . . . . . . . . . .   3
-   3.  Usecase . . . . . . . . . . . . . . . . . . . . . . . . . . .   3
-     3.1.  Notes . . . . . . . . . . . . . . . . . . . . . . . . . .   4
-     3.2.  Limitations of Full Mesh IKE Keying . . . . . . . . . . .   4
-   4.  DH or Key Exchange to Derive Keys . . . . . . . . . . . . . .   5
-   5.  Symetric key wrapped in node Public Key . . . . . . . . . . .   5
-   6.  Group Key Management Server . . . . . . . . . . . . . . . . .   5
-     6.1.  Group Key . . . . . . . . . . . . . . . . . . . . . . . .   5
-     6.2.  Remove group members  . . . . . . . . . . . . . . . . . .   6
-     6.3.  Rekey . . . . . . . . . . . . . . . . . . . . . . . . . .   6
-     6.4.  Adding a new member:  . . . . . . . . . . . . . . . . . .   6
-     6.5.  GKMS Redundancy . . . . . . . . . . . . . . . . . . . . .   6
-   7.  Node  . . . . . . . . . . . . . . . . . . . . . . . . . . . .   6
-     7.1.  Memory estimations  . . . . . . . . . . . . . . . . . . .   6
-     7.2.  Scaling of messages . . . . . . . . . . . . . . . . . . .   6
-   8.  Operational Considerations  . . . . . . . . . . . . . . . . .   6
-   9.  Acknowledgments . . . . . . . . . . . . . . . . . . . . . . .   7
-   10. Security Considerations . . . . . . . . . . . . . . . . . . .   7
-   11. Normative References  . . . . . . . . . . . . . . . . . . . .   7
-   12. Informative References  . . . . . . . . . . . . . . . . . . .   7
-   Appendix A.  Additional Stuff . . . . . . . . . . . . . . . . . .   8
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .   8
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Comparison with Shared Group Keys . . . . . . . . . . . .   4
+     1.2.  Limitations of Full-Mesh IKE Keying . . . . . . . . . . .   4
+   2.  Requirements Language . . . . . . . . . . . . . . . . . . . .   5
+   3.  Terminology . . . . . . . . . . . . . . . . . . . . . . . . .   5
+   4.  Overview of the Protocol  . . . . . . . . . . . . . . . . . .   6
+     4.1.  Architecture  . . . . . . . . . . . . . . . . . . . . . .   6
+     4.2.  Node Enrollment and Group Key Distribution  . . . . . . .   7
+     4.3.  The GKMS_CREATE_CHILD_SA Exchange . . . . . . . . . . . .   8
+       4.3.1.  IKEv2 Payloads Used in This Document  . . . . . . . .   8
+       4.3.2.  Rekeying Child SAs with the GKMS_CREATE_CHILD_SA
+               Exchange  . . . . . . . . . . . . . . . . . . . . . .  11
+       4.3.3.  Exchange Structure  . . . . . . . . . . . . . . . . .  13
+       4.3.4.  GKMS Payload Formats  . . . . . . . . . . . . . . . .  13
+       4.3.5.  GKMS_CREATE_CHILD_SA Processing Rules . . . . . . . .  15
+       4.3.6.  Exchange Processing . . . . . . . . . . . . . . . . .  18
+       4.3.7.  Algorithm Agility and Output Mapping  . . . . . . . .  19
+       4.3.8.  GKMS Tamper-Evidence for the DH Exchange  . . . . . .  20
+     4.4.  Token Verification Process  . . . . . . . . . . . . . . .  20
+     4.5.  Adding a New Member . . . . . . . . . . . . . . . . . . .  21
+     4.6.  Removing a Member . . . . . . . . . . . . . . . . . . . .  21
+     4.7.  Time-Based Rekeying . . . . . . . . . . . . . . . . . . .  22
+       4.7.1.  Pairwise Key Refresh for Forward Secrecy  . . . . . .  22
+       4.7.2.  Group Key Rekey and Key Chaining  . . . . . . . . . .  23
+     4.8.  Packet-Based Rekeying . . . . . . . . . . . . . . . . . .  24
+     4.9.  Delegated SA Deletion . . . . . . . . . . . . . . . . . .  24
+     4.10. GKMS Redundancy . . . . . . . . . . . . . . . . . . . . .  25
+     4.11. Group-Key-Derived Pairwise Key Mode . . . . . . . . . . .  25
+     4.12. Direct Group Key Mode . . . . . . . . . . . . . . . . . .  26
+     4.13. Comparison of Key Derivation Modes  . . . . . . . . . . .  27
+     4.14. Memory Requirements . . . . . . . . . . . . . . . . . . .  28
+   5.  Protocol Exchange Details . . . . . . . . . . . . . . . . . .  29
+
+
+
+Antony & Klassert         Expires 12 March 2027                 [Page 2]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+     5.1.  Message Scalability . . . . . . . . . . . . . . . . . . .  29
+     5.2.  Traffic Selectors with Multiple Network Interfaces  . . .  30
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .  30
+     6.1.  Threat Model  . . . . . . . . . . . . . . . . . . . . . .  30
+   7.  Privacy Considerations  . . . . . . . . . . . . . . . . . . .  33
+   8.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  34
+     8.1.  IKEv2 Exchange Types  . . . . . . . . . . . . . . . . . .  34
+     8.2.  IKEv2 Payload Types . . . . . . . . . . . . . . . . . . .  34
+     8.3.  IKEv2 Notify Message Types  . . . . . . . . . . . . . . .  35
+     8.4.  ESP Security Association Attributes . . . . . . . . . . .  35
+   9.  Normative References  . . . . . . . . . . . . . . . . . . . .  35
+   10. Informative References  . . . . . . . . . . . . . . . . . . .  36
+   Appendix A.  Example GKMS-Coordinated Exchange  . . . . . . . . .  37
+   Appendix B.  Open Issues  . . . . . . . . . . . . . . . . . . . .  38
+   Appendix C.  Acknowledgments  . . . . . . . . . . . . . . . . . .  38
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  38
 
 1.  Introduction
 
-   Modern distributed environments operating under a single
-   administrative domain, such as AI or machine learning (ML) clusters,
-   often comprise a large number of worker nodes that exchange sensitive
-   data over IP networks.  To ensure confidentiality and integrity of
-   these communications, the IPsec Encapsulating Security Payload (ESP),
-   [RFC4303], can be employed.
+   Modern distributed environments that operate under a single
+   administrative domain -- for example, AI or machine learning (ML)
+   compute clusters -- often comprise a large number of worker nodes
+   that exchange sensitive data over IP networks.  To protect the
+   confidentiality and integrity of these communications, IPsec ESP
+   [RFC4303] can be employed.
 
-   In this architecture, a Group Key Management Server (GKMS) functions
-   as a trusted authority responsible for authenticating participating
-   nodes and facilitating the derivation of cryptographic material
+   In the architecture described in this document, a single trusted
+   server called the Group Key Management Server (GKMS) authenticates
+   each node, distributes group policy, authorizes which pairs of nodes
+   may establish SAs, and coordinates cryptographic key derivation.
+   Each node enrolls with the GKMS and receives credentials that
+   authorize its participation in the group.
+
+   Each pair of communicating nodes independently derives a unique ESP
+   traffic key.  This is achieved through a DH exchange [RFC7296] whose
+   messages are relayed by the GKMS, so nodes do not need a direct IKEv2
+   security association (SA) with each other.  The final ESP traffic
+   keying material is then derived from two inputs: (1) the DH shared
+   secret S produced by the DH exchange and (2) the group key
+   distributed by the GKMS.  Because each node in a pair independently
+   contributes to the DH exchange, the GKMS does not learn the shared
+   secret and therefore cannot derive the ESP keys.
 
 
 
-Antony & Klassert         Expires 11 April 2026                 [Page 2]
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                 [Page 3]
 
-Internet-Draft           IKEv2 Key Distribution             October 2025
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
 
 
-   within the group.  Each node enrolls with the GKMS to obtain
-   credentials and authorization for secure participation in the group
-   communication framework.
+   An IPsec peer MAY delegate certain IKEv2 control-plane functions to
+   the GKMS.  For example, deletion of an ESP Security Association (SA)
+   from all relevant group members can be coordinated by the GKMS on
+   behalf of a node, avoiding the need for that node to send individual
+   Delete messages [RFC7296] to each peer.  The GKMS also coordinates
+   rekeying when group membership changes.
 
-   Each pair of nodes within the group MUST derive and use a unique
-   pairwise encryption key for ESP sessions.  These keys are generated
-   via an asymmetric derivation process coordinated by the GKMS,
-   enabling controlled key distribution without requiring direct peer-
-   to-peer IKE exchanges among all nodes.  This method provides a
-   scalable and efficient key management model that supports large,
-   dynamic AI/ML clusters, while only communication pairs has the
-   encryption keys.
+1.1.  Comparison with Shared Group Keys
 
-   The final ESP session key is derived from the current Group Key,
-   generated by the GKMS and shared with the current group members, per
-   session derived key.
+   In the default mode defined in this document, each pairwise key-
+   derivation exchange contributes a fresh DH shared secret S to the ESP
+   traffic-key derivation.  This provides cryptographic separation
+   between communicating pairs: compromise of one node or one pairwise
+   SA does not, by itself, reveal the DH contribution used by other
+   pairs.
 
-1.1.  Terminology
+   This document also defines two reduced-complexity modes that depend
+   only on the Group Key distributed by the GKMS:
 
-   This document uses the following terms defined in [RFC4301]:
-   Encapsulating Security Payload (ESP), Security Association (SA),
-   Security Policy Database (SPD).
+   *  In the Group-Key-Derived Pairwise Key Mode, the DH-derived
+      pairwise contribution is omitted and ESP traffic keying material
+      is derived with an empty IKM input to HKDF, so that the resulting
+      keying material depends only on the Group Key and the remaining
+      SA-specific context inputs.
+
+   *  In the Direct Group Key Mode, no per-SA derivation is performed at
+      all; the Group Key itself is used directly as the ESP traffic key
+      for all SAs within the group.
+
+   In both modes, compromise of any one node reveals the Group Key and
+   therefore eliminates pairwise cryptographic separation.  The Group-
+   Key-Derived Pairwise Key Mode still produces SA-specific derived
+   keys, whereas the Direct Group Key Mode uses the same Group Key
+   directly for all group members.  See
+   [I-D.xia-ipsecme-eesp-stateless-encryption] for related security and
+   operational trade-offs.  A mixed deployment, in which some pairs use
+   DH-derived keys while others depend only on the Group Key, is
+   possible but is described here only for completeness and is not the
+   preferred mode of operation.
+
+1.2.  Limitations of Full-Mesh IKE Keying
+
+   If every node were to establish a direct IKEv2 SA with every other
+   node, each participant would need to maintain N-1 control-plane SAs,
+   along with all associated state such as certificates, nonces, and
+   traffic selectors.  This full-mesh approach does not scale to large
+   deployments: the number of SAs grows quadratically with group size,
+   and the operational overhead of managing individual IKE exchanges,
+
+
+
+Antony & Klassert         Expires 12 March 2027                 [Page 4]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   including retransmissions and SA deletion, becomes prohibitive.  The
+   method defined in this document avoids this quadratic growth by
+   introducing the GKMS as a central coordinator.
+
+   Similar scalability challenges and design goals appear in other
+   published systems, including Google PSP [PSP], Google Falcon
+   [Falcon], the Ultra Ethernet Consortium's specification [UEC-TSS],
+   and the IETF EESP work [I-D.ietf-ipsecme-eesp].  MLS [RFC9420] and
+   Double Ratchet mechanisms were considered as potential foundations,
+   but were not chosen because they require frequent key-update round
+   trips and continuous state evolution even in the absence of
+   membership changes.
 
 2.  Requirements Language
 
    The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
    "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
    "OPTIONAL" in this document are to be interpreted as described in BCP
-   14 [RFC2119] [RFC8174]when, and only when, they appear in all
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
    capitals, as shown here.
 
-3.  Usecase
+3.  Terminology
 
-   A single administrative domain may consist of multiple nodes that
-   need to communicate securely among themselves.  The method described
-   in [I-D.xia-ipsecme-eesp-stateless-encryption] proposes using one
-   shared encryption key across all nodes.  In contrast, this document
-   defines a model in which each pair of nodes independently derives and
-   uses a unique encryption key.  This approach enhances
-   confidentiality, limits the scope of key compromise, and allows
-   scalable group operation.
+   This document uses the following terms from [RFC4301]: Encapsulating
+   Security Payload (ESP), Security Association (SA), Security Policy
+   Database (SPD), and IPsec Processing (IPsec processing entry/exit).
+
+   The following terms are specific to this document:
+
+   Group Key Management Server (GKMS):: A trusted server that
+   authenticates group members, distributes a group key, and facilitates
+   pairwise key derivation between members.  The GKMS may be deployed
+   with one or more redundant instances that share the same
+   cryptographic state.  In the context of [RFC9838], the GKMS acts as a
+   Group Controller/Key Server (GCKS).
+
+   Group Key:: A random key generated by the GKMS and distributed to all
+   current members of a group.  The group key is re-generated and re-
+   distributed whenever membership changes.  It serves as the HKDF salt
+   for deriving ESP traffic keying material (see Exchange Processing
+   (4.3.6)) and as the Traffic Encryption Key (TEK) in the G-IKEv2 sense
+   [RFC9838].
+
+   DH Shared Secret (S):: A transient symmetric secret produced by a DH
+   exchange between a pair of communicating nodes, proxied by the GKMS.
+   The GKMS does not learn S.  S is used as the input keying material
+   (IKM) for deriving the ESP traffic key during initial SA
+   establishment and for the verification token HMAC.  S is discarded
 
 
 
-
-
-
-
-
-
-
-Antony & Klassert         Expires 11 April 2026                 [Page 3]
+Antony & Klassert         Expires 12 March 2027                 [Page 5]
 
-Internet-Draft           IKEv2 Key Distribution             October 2025
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
 
 
-   Similar use cases can be found in large-scale distributed systems
-   such as Google [PSP] and [Falcon], as well as [UEC-TSS], which employ
-   similar concepts in the context of key derivation and key
-   distribution without replicating full IKE exchanges between every
-   pair of nodes.  Additionally, [I-D.ietf-ipsecme-eesp] has highlighted
-   scenarios where IKE is used solely for key derivation within data
-   center environments, further motivating scalable approaches to key
-   management in such settings.
+   after the ESP SA is established and the verification tokens have been
+   exchanged and validated.  Subsequent ESP key updates use key chaining
+   as described in Group Key Rekey and Key Chaining (4.7.2).  This
+   design ensures that no long-lived DH-derived secret persists on the
+   node after verification completes.
 
-   We considered adapting concepts from Message Layer Security (MLS)
-   [RFC9420] and Double Ratchet key update mechanisms, which ensure that
-   only the communicating endpoints possess the necessary key material.
-   However, these approaches introduce continuous operational overhead
-   due to their frequent key updates and state evolution requirements.
-   For the IPsec use case envisioned here, key derivation overhead must
-   remain minimal, and once the keys are derived, there should be no
-   operational need to periodically refresh the derivation material,
-   except in cases of explicit rekeying or membership change events.
+   Transaction ID:: A 16-octet opaque identifier chosen by the initiator
+   for exactly one outstanding GKMS-coordinated pairwise-key transaction
+   within a group.  The same Transaction ID is carried unchanged in
+   every GKMS_CREATE_CHILD_SA request/response and GMV payload that
+   belongs to that transaction.
 
-3.1.  Notes
+   ESP Traffic Keying Material:: The key material used for ESP
+   encryption and decryption.  At initial SA establishment, it is
+   derived from the DH Shared Secret S and the Group Key using HKDF
+   [RFC5869] with the Group Key as the salt and S as the IKM.  The
+   derivation is bound to the SA via the ordered node identities, ESP
+   SPIs, and nonces of the two peers (see Exchange Processing (4.3.6)).
+   After the ESP SA is established, S is discarded and subsequent ESP
+   keys are derived by key chaining (see Group Key Rekey and Key
+   Chaining (4.7.2)).
 
-   [I-D.ietf-ipsecme-g-ikev2] provides similar functionality, but is
-   designed for multicast environments and requires each IPsec peer to
-   exchange identity information over IKEv2.  While there are potential
-   conceptual overlaps with the approach described in this document, one
-   primary drawback noted by the authors is that in G-IKEv2 the Group
-   Controller/Key Server (GCKS) retains all cryptographic keys in a
-   single location.  This concentration of key material introduces a
-   significant vulnerability, as compromise of the GCKS could expose the
-   entire group’s secure communications.  G-IKEv2 use symmetric key
-   wrapping I guess more than one peer has the same keys?
+   Verification Token:: A token carried in a GMV payload and derived
+   from the DH Shared Secret S and relayed DH inputs in order to detect
+   tampering with the GKMS-relayed exchange.
 
-3.2.  Limitations of Full Mesh IKE Keying
+   Node:: A group member in the context of this document.  Equivalent to
+   a Group Member (GM) as defined in [RFC9838].
 
-   If each node were to establish IKE sessions directly with every other
-   node in the group, it would require maintaining N−1 control-plane
-   associations per participant, along with the full state required for
-   IKE negotiation and cryptographic identity management, including
-   certificate handling.  This approach imposes substantial operational
-   and computational overhead, particularly as N grows large.  It also
-   increases the complexity of the IKE software stack and does not scale
-   well to large deployments, making it impractical for dynamic or high-
-   density network environments.  When there is node removed from from
-   the group some one has to announce that and update the group.
+   GKMS-Based Pairwise Key Establishment:: The protocol defined in this
+   document for establishing pairwise ESP keys between two nodes,
+   coordinated by the GKMS but executed without the GKMS learning the
+   resulting ESP traffic key.  This is distinct from G-IKEv2 group key
+   distribution [RFC9838].
 
+4.  Overview of the Protocol
 
+4.1.  Architecture
 
+   The system consists of three logical components:
 
+   1.  The Group Key Management Server (GKMS).
 
+   2.  Enrolled group members (called "nodes" in this document).
+
+   3.  An IP network that carries both data traffic (ESP) and the IKEv2-
+       based control messages that are exchanged with, and relayed by,
+       the GKMS.
 
 
-Antony & Klassert         Expires 11 April 2026                 [Page 4]
+
+Antony & Klassert         Expires 12 March 2027                 [Page 6]
 
-Internet-Draft           IKEv2 Key Distribution             October 2025
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
 
 
-4.  DH or Key Exchange to Derive Keys
+   Nodes authenticate to the GKMS during enrollment and obtain any
+   necessary credentials.  The GKMS distributes the current Group Key
+   and the group security policy to each enrolled node.  That policy
+   includes at least which peers may establish SAs with each other, the
+   permitted DH groups, and the permitted ESP transforms.  When two
+   nodes wish to establish an ESP SA, they perform a DH exchange
+   [RFC7296] with each other's messages relayed by the GKMS.  Each node
+   independently computes the same DH Shared Secret S from the DH output
+   and derives the ESP traffic keying material as defined in Exchange
+   Processing (4.3.6).  Finally, each node
 
-   When one node, for example Alice, wishes to communicate securely with
-   another node, Bob, using IPsec and ESP over IPv4 or IPv6, Alice sends
-   a request to the Group Key Management Server (GKMS).  The GKMS
-   proxies the message to Bob and relays Bob’s response back to Alice.
+   The GKMS is therefore policy-authoritative for pair formation and
+   cryptographic policy, but it does not participate in the DH
+   computation and cannot derive either the DH Shared Secret or the
+   resulting ESP traffic keying material.
 
-   Nodes Alice and Bob perform a Diffie-Hellman (DH) a.k.a Key
-   Exchange(KE), as defined in [RFC7296], deriving symmetric keying
-   material through a suitable.  Key Derivation Function (KDF).  A
-   portion of this KE material is used to ensure that the GKMS cannot
-   act as a man-in-the-middle.  The resulting peer-to-peer key is long-
-   lived and is combined, using an XOR operation, with the group key
-   derived from the GKMS.  The resulting composite key is used for ESP
-   encryption, providing both scalability and strong key separation
-   properties.
+   The GKMS fulfills the role of a Group Controller/Key Server (GCKS) as
+   defined in [RFC9838].  Group enrollment and Group Key distribution
+   use the G-IKEv2 protocol [RFC9838] (GSA_AUTH and GSA_INBAND_REKEY
+   exchanges), while GKMS-specific pairwise key establishment is defined
+   in this document.  Both mechanisms share the same IKE SA established
+   between a node and the GKMS.
 
-5.  Symetric key wrapped in node Public Key
+4.2.  Node Enrollment and Group Key Distribution
 
-   An early consideration was to use a key wrapping mechanism, such as
-   public key wrapping or symmetric key wrapping, as described in
-   [I-D.ietf-ipsecme-g-ikev2].  At present, the preferred method is to
-   employ Diffie-Hellman (DH) key exchange to derive keys securely,
-   avoiding the need to transmit raw key material.  A public key signed
-   could be also feasible, provided it includes strong authentication
-   and verification steps.  Another candidate mechanism for evaluation
-   is [RSA-KEY-WRAPING], which may offer different operational trade-
-   offs.
+   Node enrollment and the initial Group Key distribution follow G-IKEv2
+   [RFC9838].  A node performs the GSA_AUTH exchange (Section 2.3.1 of
+   [RFC9838]) with the GKMS: after IKE_SA_INIT, the GSA_AUTH exchange
+   authenticates the node, authorizes it as a Group Member (GM) in the
+   group identified by IDg, and delivers the current Group Key and group
+   security policy via the Key Download (KD) payload.  The group
+   security policy distributed by the GKMS in the GSA_AUTH response
+   includes the permitted ESP crypto suites, the ordered list of DH
+   groups (where the first element is the preferred group for initiating
+   the pairwise key exchange), and any traffic selectors.
 
-   A node would use same key to IPsec with every other node.  The GKMS
-   would cache the node key and hand out.  One disadvantages the ESP key
-   is per node and not per node pair.
+   Once enrolled, the node possesses:
 
-6.  Group Key Management Server
+   *  A valid IKE SA with the GKMS.
 
-   This is an essential in this configuration.  This server or servers
-   can authenticate each node on
+   *  The current Group Key.
 
-6.1.  Group Key
+   *  The group security policy.
 
-   It is a random key generated by the GKMS and distributed to all
-   current members of the group.  When GKMS remove a any members Group
-   Keys must be re-generated and distributed.
-
-
-
-
-
+   *  Authorization to participate in pairwise key derivation exchanges
+      with other enrolled nodes.
 
 
 
-Antony & Klassert         Expires 11 April 2026                 [Page 5]
+
+
+Antony & Klassert         Expires 12 March 2027                 [Page 7]
 
-Internet-Draft           IKEv2 Key Distribution             October 2025
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
 
 
-6.2.  Remove group members
+   Subsequent re-enrollment to additional groups, or re-enrollment
+   within an existing IKE SA, uses the GSA_REGISTRATION exchange
+   (Section 2.3.2 of [RFC9838]).
 
-   To remove nodes, IPsec peers from a group, the GKMS would send around
-   a new Group Key to the current members.  The current members MUST
-   immediately derive a new key ESP key using this new Group Key. With
-   the Group Key this becomes a local operations.  No need to contact
-   the nodes.
+   G-IKEv2 is designed primarily for multicast group communication,
+   where all group members share the same TEK.  This document extends
+   that model for pairwise unicast communication: the Group Key obtained
+   via G-IKEv2 serves as the HKDF salt in the pairwise key derivation
+   described in Exchange Processing (4.3.6), and does not serve as a
+   direct ESP key.
 
-6.3.  Rekey
+4.3.  The GKMS_CREATE_CHILD_SA Exchange
 
-   This operation is similar to removing members.  The GKMS send a new
-   key to all nodes.  The nodes would derive new keys.
+4.3.1.  IKEv2 Payloads Used in This Document
 
-6.4.  Adding a new member:
-
-   When adding new member the GKMS would share the current Group Key
-   with the new Group member.
-
-6.5.  GKMS Redundancy
-
-   The GKMS service within an administrative domain may be deployed in a
-   redundant configuration to enhance both scalability and availability.
-   Multiple GKMS instances can operate in parallel, enabling load
-   distribution and fault tolerance.  To maintain consistent
-   cryptographic state across the domain, all GKMS instances MUST share
-   the same set of Group Keys and associated management information.
-   This ensures that any node can securely obtain or refresh keying
-   material from any available GKMS without disruption to established
-   security associations.
-
-7.  Node
-
-7.1.  Memory estimations
-
-   Each IPsec Peer which would like to send and receive ESP would have
-   save 2 * N Keys minimum, for uninterrupted messages during Rekey and
-   removal group member the node would have store 4 * Keys.
-
-7.2.  Scaling of messages
-
-   Each pair of node need one Round Trip Time to derive keys.  While the
-   IKEv2 and ESP parameters are choosen by the GKMS server.
-
-8.  Operational Considerations
-
-   Message scalability for large number of nodes in the group think of
-   thousands to possibly millions of nodes.  Number of messages
-   exchanges to derive unique key.
+   In the following descriptions, the payloads contained in the GKMS-
+   specific exchanges are indicated by the names listed below.
 
 
 
-Antony & Klassert         Expires 11 April 2026                 [Page 6]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                 [Page 8]
 
-Internet-Draft           IKEv2 Key Distribution             October 2025
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
 
 
-9.  Acknowledgments
+        +==========+===================+=========================+
+        | Notation | Payload           | Defined in              |
+        +==========+===================+=========================+
+        | GMS      | GKMS Coordination | GKMS Coordination (GMS) |
+        |          |                   | Payload (4.3.4.1)       |
+        +----------+-------------------+-------------------------+
+        | GMV      | GKMS Verification | GKMS Verification (GMV) |
+        |          |                   | Payload (4.3.4.2)       |
+        +----------+-------------------+-------------------------+
+        | HDR      | IKE header (not a | [RFC7296]               |
+        |          | payload)          |                         |
+        +----------+-------------------+-------------------------+
+        | IDg      | Group             | [RFC9838]               |
+        |          | Identification    |                         |
+        +----------+-------------------+-------------------------+
+        | IDi      | Identification -  | [RFC7296]               |
+        |          | Initiator         |                         |
+        +----------+-------------------+-------------------------+
+        | IDr      | Identification -  | [RFC7296]               |
+        |          | Responder         |                         |
+        +----------+-------------------+-------------------------+
+        | KE       | Key Exchange      | [RFC7296]               |
+        +----------+-------------------+-------------------------+
+        | Ni, Nr   | Nonce             | [RFC7296]               |
+        +----------+-------------------+-------------------------+
+        | N        | Notify            | [RFC7296]               |
+        +----------+-------------------+-------------------------+
+        | SA       | Security          | [RFC7296]               |
+        |          | Association       |                         |
+        +----------+-------------------+-------------------------+
+        | SK       | Encrypted and     | [RFC7296]               |
+        |          | Authenticated     |                         |
+        +----------+-------------------+-------------------------+
+        | TSi, TSr | Traffic Selectors | [RFC7296]               |
+        |          | - Initiator       |                         |
+        +----------+-------------------+-------------------------+
+        |          | and Responder     |                         |
+        +----------+-------------------+-------------------------+
 
-   ACKs TBD
+          Table 1: IKEv2 payload notation used in GKMS-specific
+                                exchanges
 
-10.  Security Considerations
+   The GKMS_CREATE_CHILD_SA exchange is a GKMS-specific extension to
+   IKEv2 [RFC7296] that establishes a pairwise ESP SA between two group
+   members.  Unlike the base IKEv2 CREATE_CHILD_SA exchange (Section 1.3
+   of [RFC7296]), which is a single request/response pair between two
+   directly connected peers, the GKMS_CREATE_CHILD_SA exchange is a
+   four-message pattern where the GKMS relays request and response
 
-   TBD
 
-11.  Normative References
+
+Antony & Klassert         Expires 12 March 2027                 [Page 9]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   messages between the two endpoints.  The GKMS authorizes each
+   transaction, generates a freshness nonce, and relays the DH key
+   exchange material without participating in the DH computation itself.
+   Each message leg is a standard IKEv2 exchange protected by the IKE SA
+   between the node and the GKMS.
+
+   A pairwise key setup is initiated when one node (the Initiator)
+   wishes to establish an ESP SA with another enrolled node (the
+   Responder).  The Initiator selects the Responder, a permitted DH
+   group, and Traffic Selectors that comply with the group security
+   policy distributed by the GKMS, then generates a fresh Transaction
+   ID, nonce Ni, and DH value KEi, and sends the GKMS_CREATE_CHILD_SA
+   request to the GKMS.  The GKMS authenticates the Initiator, verifies
+   group membership and policy, allocates transaction state, and relays
+   the request to the Responder, inserting a fresh GKMS-generated nonce
+   N_gkms.  The Responder verifies the request, including that the
+   proposed Traffic Selectors are acceptable under the same GKMS-
+   distributed policy, generates its own nonce Nr and DH value KEr, and
+   returns the response to the GKMS.  The GKMS verifies the response and
+   relays it to the Initiator.  After successful completion of the four-
+   message exchange, both peers exchange GMV payloads (GKMS_VERIFY
+   Notify messages) through the GKMS to verify the integrity of the
+   relayed DH values.
+
+   The GKMS_CREATE_CHILD_SA request for establishing a pairwise ESP SA
+   is:
+
+   Initiator                   GKMS                  Responder
+   -------------------------------------------------------------
+   HDR, SK {SA, Ni, KEi,
+            TSi, TSr, IDg,
+            [IDi, IDr,], GMS}  -->
+                          HDR, SK {SA, Ni, KEi,
+                                   TSi, TSr, IDg,
+                                   [IDi, IDr,], GMS}  -->
+
+                   Figure 1: GKMS_CREATE_CHILD_SA Request
+
+   The Initiator sends SA proposal(s) in the SA payload, a nonce in the
+   Ni payload, a Diffie-Hellman value in the KEi payload, proposed
+   Traffic Selectors in the TSi and TSr payloads, the group identity in
+   the IDg payload, the Initiator identity in the IDi payload, the
+   Responder identity in the IDr payload, and the GMS payload containing
+   the Transaction ID.  The proposed Traffic Selectors MUST comply with
+   the group security policy distributed by the GKMS.  The GMS payload
+   in the message from the Initiator to the GKMS does not yet contain
+   N_gkms.
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 10]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   The GKMS verifies the Initiator authorization and group membership,
+   generates a fresh N_gkms, and relays the request to the Responder,
+   inserting N_gkms into the GMS payload.  The Responder verifies the
+   IDg value, Transaction ID, IDi, IDr, selected DH group, proposed
+   Traffic Selectors, and N_gkms against the GKMS-distributed policy
+   before using KEi.
+
+   The GKMS_CREATE_CHILD_SA response is:
+
+   Initiator                   GKMS                  Responder
+   -------------------------------------------------------------
+                                  <--  HDR, SK {SA, Nr, KEr,
+                                               TSi, TSr, GMS}
+                     <--  HDR, SK {SA, Nr, KEr,
+                                  TSi, TSr, GMS}
+
+                  Figure 2: GKMS_CREATE_CHILD_SA Response
+
+   The Responder replies with the accepted cryptographic suite in the SA
+   payload, a nonce in the Nr payload, a Diffie-Hellman value in the KEr
+   payload, Traffic Selectors in the TSi and TSr payloads, and the GMS
+   payload containing the Transaction ID and N_gkms copied from the
+   request.  The Traffic Selectors in the response MUST comply with the
+   GKMS-distributed policy and MAY be a subset of what the Initiator
+   proposed, following the normal IKEv2 Traffic Selector narrowing
+   rules.  The response does not repeat IDi or IDr, because those
+   identities are already fixed by the relayed request and by the
+   transaction state maintained at the GKMS and the two endpoints.
+
+   The GKMS verifies that the response matches the stored transaction
+   state for the relayed IDg and Transaction ID, that it came from the
+   expected Responder IKE SA, and that N_gkms matches the stored value
+   for that transaction before relaying the response to the Initiator.
+
+   After the exchange, both peers independently derive the DH shared
+   secret S and the ESP traffic keying material as specified in Exchange
+   Processing (4.3.6).  The GMV payload exchange provides tamper-
+   evidence for the relayed DH values as specified in GKMS
+   Tamper-Evidence for the DH Exchange (4.3.8).
+
+4.3.2.  Rekeying Child SAs with the GKMS_CREATE_CHILD_SA Exchange
+
+   The GKMS_CREATE_CHILD_SA exchange is also used to rekey an existing
+   pairwise ESP SA.  This follows the same model as IKEv2
+   CREATE_CHILD_SA rekeying in Section 1.3.3 of [RFC7296], except that
+   all messages are relayed through the GKMS and carry the GMS payload.
+   The SA being rekeyed is identified with the standard REKEY_SA Notify
+   payload defined by [RFC7296].  The applicable group and policy
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 11]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   context is identified explicitly with IDg, as in the initial
+   exchange; no additional GKMS-specific rekey field is required.
+
+   The GKMS_CREATE_CHILD_SA request for rekeying a Child SA is:
+
+   Initiator                   GKMS                  Responder
+   -------------------------------------------------------------
+   HDR, SK {N(REKEY_SA), SA, Ni, [KEi,]
+            TSi, TSr, IDg, GMS}  -->
+                          HDR, SK {N(REKEY_SA), SA, Ni, [KEi,]
+                                   TSi, TSr, IDg, GMS}  -->
+
+       Figure 3: GKMS_CREATE_CHILD_SA Request for Rekeying a Child SA
+
+   The Initiator sends the standard REKEY_SA Notify payload, whose SPI
+   field identifies the inbound ESP SA that is being replaced, together
+   with SA proposal(s) in the SA payload, a nonce in the Ni payload,
+   optionally a Diffie-Hellman value in the KEi payload, the proposed
+   Traffic Selectors in the TSi and TSr payloads, the group identity in
+   the IDg payload, and the GMS payload containing the Transaction ID.
+   The proposed Traffic Selectors MUST comply with the group security
+   policy distributed by the GKMS for the identified group.  As in
+   [RFC7296], the notifications used during the original Child-SA
+   creation MAY also be sent again in this rekey exchange when they
+   continue to apply.
+
+   The GKMS_CREATE_CHILD_SA response for rekeying a Child SA is:
+
+   Initiator                   GKMS                  Responder
+   -------------------------------------------------------------
+                                  <--  HDR, SK {SA, Nr, [KEr,]
+                                               TSi, TSr, GMS}
+                     <--  HDR, SK {SA, Nr, [KEr,]
+                                  TSi, TSr, GMS}
+
+      Figure 4: GKMS_CREATE_CHILD_SA Response for Rekeying a Child SA
+
+   The Responder replies with the accepted offer in an SA payload, a
+   nonce in the Nr payload, and a Diffie-Hellman value in the KEr
+   payload if KEi was included in the request and the selected
+   cryptographic suite includes that group.  The TSi and TSr payloads in
+   the response define traffic to be sent on the new SA, MUST comply
+   with the GKMS-distributed policy for the identified group, and MAY be
+   a subset of what the Initiator proposed, as in [RFC7296].  The
+   response GMS payload carries the same Transaction ID and the GKMS-
+   generated nonce N_gkms for the transaction.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 12]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   The GKMS authorizes and relays the rekey exchange exactly as it does
+   for initial SA establishment.  In particular, it verifies that the
+   Initiator is authorized for the identified group, that the proposed
+   Traffic Selectors are permitted by the applicable GKMS-distributed
+   policy, and that the response matches the stored transaction state.
+   However, it does not participate in the DH computation and does not
+   track the rekey state of individual SAs.  Upon successful completion
+   of the exchange, both peers install the new ESP SA and MUST stop
+   using the old SA within a reasonable transition period (see
+   Section 1.3.3 of [RFC7296]).  The old ESP key MUST be securely wiped.
+
+   The two Notify message types GKMS_KEY_REFRESH_REQUEST and
+   GKMS_KEY_REFRESH_RESPONSE defined in earlier revisions of this
+   document are obsolete.  Pairwise key refresh and rekey are initiated
+   directly with a GKMS_CREATE_CHILD_SA exchange as described above.
+
+4.3.3.  Exchange Structure
+
+   The GKMS is not a relay-only signaling component.  It is the
+   authoritative source of admission and policy for a transaction.  A
+   transaction is valid only if the GKMS authorizes the identified
+   initiator, responder, group, DH group, and policy combination.
+
+   This document defines an extension to IKEv2 using a new IKEv2
+   Exchange Type (see IKEv2 Exchange Types (8.1)) and new IKEv2 Payload
+   Types (see IKEv2 Payload Types (8.2)).  The exchange is carried in
+   authenticated and integrity-protected IKEv2 exchanges between each
+   node and the GKMS, using the existing IKEv2 message header defined in
+   [RFC7296].
+
+   This document does not redefine the base IKEv2 syntax or the
+   semantics of standard IKEv2 payloads.  Instead, it defines new GKMS-
+   specific exchange semantics, new GKMS-specific payload formats, and
+   processing rules layered on top of protected IKEv2 exchanges between
+   a node and the GKMS.
+
+4.3.4.  GKMS Payload Formats
+
+   This document defines two new IKEv2 payload types for the
+   GKMS_CREATE_CHILD_SA exchange: the GKMS Coordination (GMS) payload
+   and the GKMS Verification (GMV) payload.  All multi-octet fields are
+   encoded in network byte order.  In both payloads, the only variable-
+   length data appears at the end of the payload, so its length is
+   derived from the IKEv2 Payload Length field after subtracting the
+   fixed-size header and Transaction ID fields.
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 13]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+4.3.4.1.  GKMS Coordination (GMS) Payload
+
+   The GMS payload carries the Transaction ID and the GKMS-generated
+   freshness nonce N_gkms.  The GMS payload uses the generic IKEv2
+   payload header defined in [RFC7296]:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Next Payload  |C|  Payload Length |         Reserved          |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   |                      Transaction ID                           |
+   |                        (16 octets)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                        N_gkms                                 ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+   *  *Next Payload* (1 octet): Next payload type for chained payloads.
+
+   *  *C (Critical)* (1 bit): MUST be set to 1.  A receiver that does
+      not recognize this payload type MUST reject the entire message.
+
+   *  *Payload Length* (15 bits): Length of this payload in octets,
+      including the header.
+
+   *  *Transaction ID* (16 octets): Opaque transaction identifier chosen
+      by the initiating GM.  The same value MUST appear in every message
+      belonging to that transaction.  A Transaction ID is unique only
+      within the scope of one initiating node and one Group ID;
+      receivers MUST use that tuple, not the Transaction ID alone, for
+      transaction lookup.
+
+   *  *N_gkms* (variable): Fresh GKMS-generated nonce occupying the
+      remainder of the payload after the fixed-size fields.
+      Implementations SHOULD generate N_gkms with at least 128 bits of
+      entropy.
+
+   When a node originates a GKMS_CREATE_CHILD_SA request toward the
+   GKMS, N_gkms MUST be absent, so the payload length is exactly the
+   size of the fixed fields.  When the GKMS relays a request to the
+   responding node, it MUST insert a fresh N_gkms and update the Payload
+   Length accordingly.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 14]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+4.3.4.2.  GKMS Verification (GMV) Payload
+
+   The GMV payload carries the tamper-evidence verification token for
+   the DH exchange:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Next Payload  |C|  Payload Length |         Reserved           |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   |                      Transaction ID                           |
+   |                        (16 octets)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                           Token                                ~
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+   *  *Next Payload* (1 octet): Next payload type for chained payloads.
+
+   *  *C (Critical)* (1 bit): MUST be set to 1.
+
+   *  *Payload Length* (15 bits): Length of this payload in octets.
+
+   *  *Transaction ID* (16 octets): Transaction identifier, copied from
+      the corresponding GKMS_CREATE_CHILD_SA request.
+
+   *  *Token* (variable): Verification token occupying the remainder of
+      the payload after the fixed-size fields, as defined in GKMS
+      Tamper-Evidence for the DH Exchange (4.3.8).  Token_i is sent by
+      the original initiator; Token_r is sent by the original responder.
+      The recipient determines which token is expected based on the
+      transaction context and the direction of the GMV payload.
+
+4.3.5.  GKMS_CREATE_CHILD_SA Processing Rules
+
+   The GKMS_CREATE_CHILD_SA exchange consists of four protected IKEv2
+   message legs: the Initiator sends a request to the GKMS, the GKMS
+   relays the request to the Responder, the Responder returns a response
+   to the GKMS, and the GKMS relays that response to the Initiator.
+   Each leg is protected by the IKE SA between the node and the GKMS.
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 15]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   The Initiator MUST select the target Responder, a DH group, and
+   Traffic Selectors that are permitted by the current GKMS policy for
+   the group.  If the Responder cannot support the indicated policy,
+   including the proposed Traffic Selectors, it MUST reject the
+   transaction, and the GKMS MUST report that failure to the Initiator.
+
+   The Initiator MUST generate a fresh Transaction ID for each new
+   GKMS_CREATE_CHILD_SA request and MUST NOT reuse the same Transaction
+   ID for a different outstanding transaction in the same group.  If the
+   Initiator retransmits a request because no response has been
+   received, it MUST reuse the same Transaction ID and identical request
+   contents.
+
+   Upon receiving a GKMS_CREATE_CHILD_SA request from the Initiator, the
+   GKMS MUST:
+
+   1.  Verify that the request is well formed.
+
+   2.  Verify that the Initiator is authorized for the identified group.
+
+   3.  Verify that the Responder identity names a valid group member.
+
+   4.  Verify that the requested DH group, Traffic Selectors, and policy
+       are permitted.
+
+   5.  Allocate or recover transaction state for the Transaction ID.
+
+   6.  Generate a fresh N_gkms if this is the first valid request for
+       that transaction.
+
+   7.  Relay the request to the Responder, inserting N_gkms and
+       otherwise preserving the request fields.
+
+   If the GKMS receives a malformed GKMS_CREATE_CHILD_SA request, it
+   MUST reject the request using the normal IKEv2 error handling of the
+   protected exchange with the sender, for example INVALID_SYNTAX
+   [RFC7296].  If the GKMS cannot or will not continue a well-formed
+   transaction, it MUST report the failure to the Initiator using a
+   GKMS_CREATE_CHILD_SA response with an error Notify payload.
+
+   If the GKMS receives a second GKMS_CREATE_CHILD_SA request with the
+   same IDg, same Initiator, and same Transaction ID, it MUST treat the
+   request as a retransmission only if all other request fields are
+   identical to the stored transaction state.  If the contents differ,
+   the GKMS MUST reject the request and MUST NOT merge the two
+   transactions.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 16]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   Upon receiving a GKMS_CREATE_CHILD_SA request from the GKMS, the
+   Responder MUST verify that the IDg, Initiator ID, Responder ID, DH
+   group, proposed Traffic Selectors, and N_gkms are present and
+   acceptable before using KEi.  If the Responder accepts the
+   transaction, it MUST send a GKMS_CREATE_CHILD_SA response carrying
+   Nr, KEr, and the selected Traffic Selectors.  If the Responder
+   rejects the transaction because of policy or local capability, it
+   MUST send a GKMS_CREATE_CHILD_SA response with an error Notify
+   payload.  An error response MUST carry the Transaction ID so that the
+   Initiator and the GKMS can correlate it to the outstanding
+   transaction, but it MUST NOT carry Nr, KEr, Traffic Selectors, or
+   N_gkms.
+
+   The GKMS MUST correlate all relayed request, response, and
+   verification messages belonging to the same transaction and MUST
+   deliver them only to the intended peer.  The GKMS MUST NOT alter Ni,
+   Nr, KEi, KEr, or the selected DH group while relaying a transaction.
+   After inserting N_gkms into the relayed request, the GKMS MUST
+   preserve that value unchanged for the remainder of the transaction.
+
+   Upon receiving a GKMS_CREATE_CHILD_SA response from the Responder,
+   the GKMS MUST verify that the Transaction ID matches stored
+   transaction state, that the response arrived from the expected
+   Responder IKE SA, and, for a successful response, that N_gkms matches
+   the stored value for that transaction before relaying the response to
+   the Initiator.
+
+   Each endpoint MUST verify that the transaction identified by the
+   received Transaction ID is consistent with the relayed request state,
+   including IDg, peer identity, DH group, Traffic Selectors, and GKMS
+   freshness value, before using any relayed KE payload.
+
+   An endpoint that receives a GKMS_CREATE_CHILD_SA response or GMV
+   payload for an unknown transaction, or that detects inconsistent IDg,
+   Transaction ID, or N_gkms values, MUST abort the local transaction
+   state.  If the endpoint can still identify the transaction, it SHOULD
+   send an error indication through the GKMS, for example
+   TEMPORARY_FAILURE or VERIFICATION_FAILED, as appropriate.
+
+   Once both peers have derived ESP traffic keying material for the same
+   transaction, each peer MUST either complete the tamper-evidence
+   verification defined later in this section successfully or abort the
+   transaction.
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 17]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   The GKMS MUST maintain transaction state at least until it has
+   relayed the final expected message for the transaction or until the
+   transaction times out.  Once transaction state has been discarded,
+   the GKMS MUST reject later messages for that transaction rather than
+   attempting to reconstruct state from partial inputs.
+
+   A GKMS implementation MUST impose a local transaction lifetime and
+   MUST expire transaction state that has not completed within that
+   lifetime.  The exact timeout value is deployment-specific, but it
+   MUST be long enough to accommodate at least one protected IKEv2
+   retransmission cycle between a node and the GKMS.  When transaction
+   state expires, later GKMS_CREATE_CHILD_SA response or GMV payload
+   messages for that transaction MUST be treated as unknown or expired
+   and handled as described above.
+
+   While a transaction is active, the node and the GKMS recognize an
+   immediately repeated initial request with the same {IDg, Initiator
+   ID, Transaction ID} tuple as a replay or retransmission rather than
+   as a distinct new transaction.  For relayed later-leg messages, the
+   node and the GKMS additionally validate N_gkms to bind each message
+   to the active transaction instance.  After transaction state has been
+   expired or discarded, later messages for that transaction are treated
+   as unknown or expired as described above.
+
+4.3.6.  Exchange Processing
+
+   1.  The Initiator sends a GKMS_CREATE_CHILD_SA request to the GKMS
+       identifying the Responder and carrying the Initiator's
+       contribution to the key exchange, including fresh nonce material,
+       any KE payload required by the selected DH group, and proposed
+       Traffic Selectors that comply with the GKMS-distributed policy.
+
+   2.  The GKMS relays the request parameters to the Responder.
+
+   3.  The Responder returns a GKMS_CREATE_CHILD_SA response, relayed by
+       the GKMS to the Initiator, carrying the Responder's corresponding
+       nonce material, KE payload, and the selected Traffic Selectors
+       for the new SA.
+
+   4.  Using the exchanged DH values, both peers compute the DH shared
+       secret S as specified by the selected group in [RFC7296].
+
+   5.  Both peers independently derive the ESP traffic keying material
+       directly from S:
+
+       ESP Traffic Keying Material = HKDF-<H>( Salt = Group Key, IKM =
+       S, Info = "GKMS-ESP" || IDi || IDr || SPIi || SPIr || Ni || Nr ||
+       N_gkms, L = L_esp)
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 18]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+       where IDi is the Initiator ID, IDr is the Responder ID, SPIi and
+       SPIr are the ESP SPIs of the initiator and responder, and Ni, Nr,
+       and N_gkms are exactly the octet strings carried in the
+       corresponding request and response messages.  Both peers MUST use
+       the original requester as the initiator and the responding node
+       as the responder when forming these ordered inputs.  The DH
+       shared secret S MUST be the IKM input so that the GKMS cannot
+       compute the ESP traffic keying material from the relayed KE
+       payloads alone.  After the ESP SA is established and the
+       verification tokens have been exchanged and validated, S is
+       discarded and MUST be securely wiped.
+
+   6.  The Initiator computes a tamper-evidence verification token and
+       sends it through the GKMS in a GMV payload.  The Responder does
+       the same in the reverse direction.
+
+   7.  The Initiator and the Responder verify the received tamper-
+       evidence tokens.  If either token mismatches, both sides abort
+       the transaction.
+
+   8.  If the tamper-evidence tokens validate, the Initiator and the
+       Responder install the resulting ESP SA state and begin using the
+       derived ESP Traffic Keying Material for data traffic.
+
+   9.  The GKMS may discard the transaction state after the expected GMV
+       payloads have been relayed or after the local transaction
+       lifetime expires.
+
+4.3.7.  Algorithm Agility and Output Mapping
+
+   The HKDF constructions in this document define a generic key
+   schedule.  They do not hard-code any one ESP algorithm or any one
+   HKDF hash.  The underlying HMAC hash is denoted by <H> in the
+   formulas in this document.  The negotiated group policy MUST identify
+   <H> and both peers MUST use the same value for all HKDF computations
+   and tamper-evidence token computations within a transaction.  The
+   amount of ESP Traffic Keying Material that must be extracted, denoted
+   L_esp, is determined by the negotiated ESP transform set.
+
+   When the selected ESP transform requires multiple traffic keys,
+   salts, or other per-SA secret values, both peers MUST consume the
+   HKDF output stream in the same deterministic order.  That ordering
+   MUST be defined by the negotiated ESP transform specification or by
+   the group policy conveyed by the GKMS, and it MUST NOT depend on
+   local implementation choices.
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 19]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+4.3.8.  GKMS Tamper-Evidence for the DH Exchange
+
+   The GKMS is trusted not to modify relayed DH messages.  However, a
+   compromised or faulty GKMS implementation could alter relayed KE
+   payloads and cause the Initiator and the Responder to derive
+   different DH Shared Secrets without immediate indication of mismatch.
+   To detect such modification, both peers MUST exchange a tamper-
+   evidence verification token after the DH exchange.
+
+   After both peers have computed the DH Shared Secret S and the ESP
+   traffic keying material, each peer computes a tamper-evidence
+   verification token:
+
+   Token_i = HMAC-<H>(
+     S,
+     "GKMS-DH-Verify" || "I" || IDi || IDr || KEi || KEr || N_gkms)
+   Token_r = HMAC-<H>(
+     S,
+     "GKMS-DH-Verify" || "R" || IDi || IDr || KEi || KEr || N_gkms)
+
+   where <H> is the HMAC hash identified by the negotiated group policy
+   for the transaction.  Following [RFC5869], any HMAC construction MAY
+   be used for both the token computation and the HKDF; common choices
+   are HMAC-SHA-256, HMAC-SHA-384, or HMAC-SHA-512.
+
+   Each peer sends its token to the other via the GKMS in a GMV payload.
+   Upon receiving the peer's token, the peer verifies it matches the
+   expected value.  If verification fails, the SA MUST be aborted and
+   the GKMS notified.
+
+4.4.  Token Verification Process
+
+   When a peer receives a GMV payload containing a token carried in the
+   Token field, it MUST perform the following steps to verify the token:
+
+   1.  Compute the expected token value using the stored DH Shared
+       Secret S, the ordered identity fields, the DH values, and the
+       N_gkms value received in the GKMS_CREATE_CHILD_SA request and
+       response.  If the local state does not have all required values
+       (for example, if transaction state was lost), token verification
+       MUST fail.
+
+   2.  Compare the received token octet string with the computed
+       expected token octet string using a constant-time comparison
+       function.  If the two octet strings differ in length or in any
+       octet, the verification fails.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 20]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   3.  On verification failure: the peer MUST abort the transaction,
+       discard any derived key material, and SHOULD send a GMV payload
+       with VERIFICATION_FAILED through the GKMS to inform the peer.
+       The peer MUST NOT install the ESP SA.
+
+   4.  On verification success: the peer proceeds to install the ESP SA
+       and begin using the derived traffic keying material.  Both peers
+       MUST have verified the received token before the ESP SA is used
+       for data traffic.
+
+   The token is computed over the DH public values as received in the
+   GKMS_CREATE_CHILD_SA request and response, before any transformation
+   or hashing is applied by the ESP Traffic Keying Material derivation.
+   This ensures that tampering with relayed KE payloads results in a
+   different token value and is therefore detected.
+
+   The GKMS also issues a fresh nonce N_gkms in the GMS payload.  This
+   nonce MUST be included in the derivation of the ESP traffic keying
+   material and in the verification tokens.  This prevents replay of key
+   derivation messages and cross-transaction token substitution.  Each
+   GKMS_CREATE_CHILD_SA transaction MUST use a unique nonce; the GKMS
+   SHOULD generate nonces with at least 128 bits of entropy.
+
+4.5.  Adding a New Member
+
+   When a new member joins an existing group, the GKMS authenticates the
+   node using G-IKEv2.  If the node does not have a valid IKE SA with
+   the GKMS, it first performs IKE_SA_INIT followed by GSA_AUTH
+   (Section 2.3.1 of [RFC9838]), as described in Node Enrollment and
+   Group Key Distribution (4.2).  If the node already has a valid IKE SA
+   with the GKMS, it uses the GSA_REGISTRATION exchange (Section 2.3.2
+   of [RFC9838]) to enroll in the additional group.  In either case, the
+   GKMS distributes the current Group Key and group security policy,
+   after which the new node can derive pairwise keys with existing
+   members using the key derivation exchange defined in The
+   GKMS_CREATE_CHILD_SA Exchange (4.3).
+
+4.6.  Removing a Member
+
+   When the GKMS removes one or more members, it generates a new Group
+   Key and distributes it to all remaining members via G-IKEv2
+   GSA_INBAND_REKEY (Section 2.4.2 of [RFC9838]) or GSA_REKEY
+   (Section 2.4.1 of [RFC9838]).  Upon receiving the new Group Key, each
+   remaining node MUST promptly re-derive all ESP traffic keying
+   material using key chaining (see Group Key Rekey and Key Chaining
+   (4.7.2)).  The removed members cannot derive the new keys because
+   they do not possess the current ESP keying material.
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 21]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   The previous Group Key MAY remain valid for a short transition period
+   to allow for delivery skew, corresponding to the Deactivation Time
+   Delay (DTD) defined in [RFC9838].  During that period, nodes MAY
+   accept both old-key and new-key traffic for the affected SAs, but
+   they MUST begin originating new traffic with the replacement Group
+   Key no later than the activation point defined by the GKMS.  This
+   overlap window SHOULD be kept short.
+
+   An atomic rekey mechanism may be desirable to prevent race conditions
+   during membership changes.  In such a scheme, the GKMS would first
+   distribute the new Group Key and then send a distinct activation
+   signal indicating the time or event at which the new key becomes
+   active, as controlled by the Activation Time Delay (ATD) parameter
+   defined in [RFC9838].  The design of this mechanism requires further
+   evaluation.
+
+4.7.  Time-Based Rekeying
+
+   At predefined intervals, the GKMS generates a new Group Key and
+   distributes it to all active nodes via G-IKEv2 GSA_INBAND_REKEY
+   (Section 2.4.2 of [RFC9838]) or GSA_REKEY (Section 2.4.1 of
+   [RFC9838]).  Each node re-derives its ESP traffic keying material
+   using key chaining as described in Group Key Rekey and Key Chaining
+   (4.7.2).  This provides forward secrecy over time and limits the
+   cryptoperiod of any given key without disrupting established SAs.
+
+4.7.1.  Pairwise Key Refresh for Forward Secrecy
+
+   Time-based rekeying replaces the Group Key, and ESP keys are updated
+   by key chaining.  However, the current ESP key is not refreshed from
+   a fresh DH exchange unless pairwise key refresh is explicitly
+   triggered.  An attacker who records all traffic and later obtains a
+   compromised ESP key can decrypt all ESP traffic for which that key
+   was used, including any ESP keys derived from it via key chaining
+   (see Group Key Rekey and Key Chaining (4.7.2)).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 22]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   To achieve forward secrecy for the DH contribution as well, a
+   deployment MAY perform periodic pairwise key refresh.  In this mode,
+   a node To achieve forward secrecy for the DH contribution as well, a
+   deployment MAY perform periodic pairwise key refresh.  In this mode,
+   a node initiates a GKMS_CREATE_CHILD_SA exchange with a peer to rekey
+   the existing pairwise ESP SA as described in Rekeying Child SAs with
+   the GKMS_CREATE_CHILD_SA Exchange (4.3.2).  The request identifies
+   the SA being rekeyed with the standard REKEY_SA Notify payload
+   defined by [RFC7296] and carries IDg to bind the rekey operation to
+   the applicable GKMS group policy.  The exchange MAY include a new DH
+   contribution to derive fresh ESP traffic keying material, as in
+   [RFC7296].  The old ESP key MUST be securely wiped after the new SA
+   is installed.
+
+   Nodes select their own refresh intervals; the GKMS does not schedule
+   or coordinate pairwise key refresh across multiple pairs.  The GKMS
+   MUST NOT be involved in the DH computation; it only relays the KE
+   payloads as described in The GKMS_CREATE_CHILD_SA Exchange (4.3).
+
+   Implementations that require strong forward secrecy SHOULD perform
+   pairwise key refresh at least as frequently as required by the
+   security policy of the deployed cipher suite.
+
+4.7.2.  Group Key Rekey and Key Chaining
+
+   After an ESP SA is established, the DH Shared Secret S is discarded.
+   Subsequent updates of the ESP traffic key do not require a new DH
+   exchange; instead, each node independently derives the new ESP key by
+   key chaining:
+
+   ESP Traffic Keying Material_new = HKDF-<H>(
+     Salt     = Group Key_new,
+     IKM      = ESP Traffic Keying Material_old,
+     Info     = "GKMS-ESP" || IDi || IDr ||
+                SPIi || SPIr || Ni || Nr || N_gkms || "Rekey",
+     L        = L_esp)
+
+   where the nonces Ni, Nr, and N_gkms are the original values from the
+   initial SA establishment; "Rekey" is a single octet appended to the
+   Info string to distinguish the rekey derivation from the initial
+   derivation.  The new ESP key MUST be derived before the old key is
+   wiped.
+
+   Key chaining has the following security property: if an ESP key is
+   compromised after a rekey event, the compromise does not reveal the
+   previous ESP key, because HKDF provides forward security in the IKM
+   direction.  However, compromise of an old ESP key does allow
+   derivation of subsequent ESP keys in that chain, because each new key
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 23]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   uses the old key as IKM.  This is analogous to the key schedule in
+   MLS [RFC9420], which also stores only derived leaf keys and not the
+   underlying ratchet seeds.  In both designs, the one-hop exposure is
+   considered an acceptable trade-off against the implementation
+   simplicity of eliminating persistent DH-derived secrets.  A
+   deployment that requires resistance to compromise of an ESP key
+   followed by a rekey event SHOULD perform a full pairwise key refresh
+   (a fresh DH exchange) before the next rekey cycle.
+
+   The key-chaining derivation does not involve the GKMS; it uses only
+   locally available state (the current ESP key and the new Group Key).
+   The GKMS need not be aware of the rekey state of individual SAs.
+   deployed cipher suite.
+
+4.8.  Packet-Based Rekeying
+
+   In the packet-based rekey model, the GKMS does not maintain packet or
+   byte counters per SA.  Instead, when a node detects that an SA has
+   reached a local usage threshold, it notifies the GKMS, which then
+   initiates the corresponding group rekey or pairwise refresh
+   procedure.  This model adapts rekey frequency to actual traffic
+   volume while keeping per-SA traffic accounting local to the
+   endpoints.
+
+4.9.  Delegated SA Deletion
+
+   An IKEv2 node that wishes to terminate an SA is normally required to
+   send a DeleteNotify payload [RFC7296] to each peer, await a response,
+   and retransmit if necessary.  In a large group, performing this
+   individually for each peer is expensive.
+
+   A node MAY instead delegate SA deletion to the GKMS.
+
+   GKMS-Initiated Group Key Invalidation:: The GKMS immediately
+   generates a new Group Key and distributes it to all remaining group
+   members.  Upon activation of the new Group Key, all ESP SAs
+   established with the removed node become unusable, because the
+   removed node does not possess the new Group Key.  This mode does NOT
+   require the GKMS to hold per-node credentials for peer-to-peer IKE
+   exchanges; it relies solely on the group rekey mechanism.
+
+   The GKMS SHOULD track the outcome of deletion operations and MAY
+   notify the requesting node of success or failure for each affected
+   peer.
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 24]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+4.10.  GKMS Redundancy
+
+   A deployment MAY operate multiple GKMS instances in parallel for
+   availability and load distribution.  All GKMS instances in a domain
+   MUST share the same cryptographic state, specifically the current
+   Group Key and any pending rekey state, so that any instance can
+   continue keying operations without interruption.  A node that
+   discovers a GKMS instance unreachable SHOULD attempt to contact
+   another instance.
+
+   If a deployment expects failover during active transactions, the GKMS
+   instances MUST also share enough transaction state to preserve
+   correct processing of outstanding {IDg, Initiator ID, Transaction ID}
+   tuples, including any stored N_gkms value and replay-cache entries.
+   If such state sharing is not available, a failover target MUST reject
+   later messages for unknown transactions rather than attempting to
+   guess or reconstruct transaction state.  In that case, the endpoint
+   peers MUST restart the transaction with a new Transaction ID.
+
+4.11.  Group-Key-Derived Pairwise Key Mode
+
+   By default, each pairwise key derivation exchange contributes a fresh
+   DH shared secret S as the IKM for the ESP traffic key derivation.
+   For deployments that do not require this pairwise contribution, the
+   IKM input MAY be empty.  In this mode, the ESP traffic keying
+   material is derived as:
+
+   ESP Traffic Keying Material = HKDF-<H>(
+     Salt = Group Key,
+     IKM  = empty,
+     Info = "GKMS-ESP" || IDi || IDr ||
+            SPIi || SPIr || Ni || Nr || N_gkms,
+     L    = L_esp)
+
+   This mode removes the DH-derived pairwise contribution from the key
+   schedule.  It simplifies implementation but means that compromise of
+   any single node exposes the Group Key used for all such SAs and thus
+   removes cryptographic separation based on a secret known only to one
+   pair of nodes.  Even in this mode, the derived ESP traffic keys can
+   still differ across SAs because the derivation remains bound to the
+   SA- specific context inputs.  Nodes that require pairwise key
+   separation SHOULD NOT use this mode.
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 25]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+4.12.  Direct Group Key Mode
+
+   In this mode, the Group Key itself is used directly as the ESP
+   traffic key for all SAs within the group.  The Group Key is
+   distributed by the GKMS during enrollment and is already available to
+   both peers; no per-SA key derivation is performed.
+
+   The ESP traffic keying material is the Group Key itself:
+
+   ESP Traffic Keying Material = Group Key
+
+   A node establishes an SA with a peer by sending a notification to the
+   GKMS containing the local SPI and a fresh nonce; the GKMS forwards
+   this information to the peer.  Both peers already possess the Group
+   Key and can use it as the ESP key for the SA immediately.  No DH
+   computation, no verification token exchange, and no per-SA key
+   derivation is required.  The GKMS does not participate in the ESP key
+   computation.
+
+   This mode has the following properties:
+
+   *  Zero per-SA key storage: the Group Key is already present on each
+      node; no additional keys are stored per SA.
+
+   *  Single-message SA establishment: the initiating node notifies the
+      GKMS; the GKMS forwards the notification to the responding node;
+      both can immediately use the Group Key as the ESP key.
+
+   *  Every group member can decrypt every other member's traffic: the
+      Group Key is shared with all members and provides no pairwise
+      separation whatsoever.
+
+   This mode is NOT RECOMMENDED for general use.  It provides the same
+   level of protection as a shared group key scheme and does not limit
+   the impact of a compromised node to a single pairwise relationship.
+   Cryptographic separation between pairs is eliminated entirely.
+
+   Direct Group Key Mode is intended only for deployments where other
+   modes are not viable, including:
+
+   *  Nodes with severe storage constraints that cannot store per-SA
+      keys,
+
+   *  Very large groups where per-SA key storage is prohibitive, or
+
+   *  Environments where all group members are fully trusted and the
+      threat model is limited to protection against external attackers
+      who do not possess the Group Key.
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 26]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+4.13.  Comparison of Key Derivation Modes
+
+   This section compares the message complexity and key-state properties
+   of the three key-derivation modes defined in this document.
+
+   The following table compares the number of end-to-end protocol
+   messages and the number of round trips required to install a new ESP
+   SA in each mode:
+
+   +==============+================+===================+==============+
+   |              | Default DH-    | Group-Key-Derived | Direct Group |
+   |              | derived mode   | Pairwise          | Key Mode     |
+   +==============+================+===================+==============+
+   |              |                | Key Mode          |              |
+   +==============+================+===================+==============+
+   | Messages     | 2 (request +   | 1 relayed request | 1 relayed    |
+   |              | response) +    |                   | notification |
+   +--------------+----------------+-------------------+--------------+
+   |              | 2 verification |                   |              |
+   |              | tokens         |                   |              |
+   +--------------+----------------+-------------------+--------------+
+   | Round trips  | 2 RTT          | 0 RTT             | 0 RTT        |
+   +--------------+----------------+-------------------+--------------+
+   | DH           | Required for   | None              | None         |
+   | operations   | both peers     |                   |              |
+   +--------------+----------------+-------------------+--------------+
+   | Verification | Required       | Not needed        | Not needed   |
+   | token        |                |                   |              |
+   +--------------+----------------+-------------------+--------------+
+   | Tokens       | 2 (one in each | 0                 | 0            |
+   | exchanged    | direction)     |                   |              |
+   +--------------+----------------+-------------------+--------------+
+   | Per-SA key   | 1 ESP key per  | 1 ESP key per     | None         |
+   | storage      | direction      | direction         |              |
+   +--------------+----------------+-------------------+--------------+
+
+         Table 2: Message complexity of the key derivation modes
+
+   In the default DH-derived mode, both peers perform a DH exchange
+   before deriving the ESP keying material.  That exchange is followed
+   by a verification-token exchange to confirm that both peers derived
+   the same DH shared secret.
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 27]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   In the Group-Key-Derived Pairwise Key Mode, the ESP keying material
+   can be derived after a single relayed request from the Initiator to
+   the Responder through the GKMS.  The Initiator supplies its SPI and
+   nonce, the GKMS appends a freshness nonce, and the Responder then has
+   all inputs needed to derive the ESP keying material from the Group
+   Key.  No DH computation, no verification-token exchange, and no
+   additional round trips are required.
+
+   In the Direct Group Key Mode, no per-SA key derivation is performed.
+   The Group Key itself is used as the ESP key, and SA establishment
+   requires only a single relayed notification through the GKMS.
+
+4.14.  Memory Requirements
+
+   The following table compares per-node key-storage requirements across
+   different IPsec keying approaches.  All figures assume N group
+   members and P active peers for the node under consideration.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 28]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+    +=============================================+===================+
+    | Scheme                                      | Keys Stored per   |
+    |                                             | Node              |
+    +=============================================+===================+
+    | Full-mesh IKEv2 [RFC7296]                   | O(N) IKE SA state |
+    |                                             | plus 2 x (N-1)    |
+    |                                             | ESP traffic       |
+    +---------------------------------------------+-------------------+
+    |                                             | keys; roughly     |
+    |                                             | double that ESP   |
+    |                                             | key count while   |
+    +---------------------------------------------+-------------------+
+    |                                             | overlapping Child |
+    |                                             | SAs exist during  |
+    |                                             | rekey             |
+    +---------------------------------------------+-------------------+
+    | GKMS - Default DH-derived Mode              | 1 Group Key + 2 x |
+    |                                             | P ESP traffic     |
+    |                                             | keys              |
+    +---------------------------------------------+-------------------+
+    | GKMS - Group-Key-Derived Mode               | 1 Group Key + 2 x |
+    |                                             | P ESP traffic     |
+    |                                             | keys              |
+    +---------------------------------------------+-------------------+
+    | GKMS - Direct Group Key Mode                | 1 Group Key       |
+    +---------------------------------------------+-------------------+
+    | PSP [PSP]                                   | 1 master key + N  |
+    |                                             | send keys         |
+    |                                             | (unspecified)     |
+    +---------------------------------------------+-------------------+
+    | EESP stateless                              | 2 keys shared     |
+    | [I-D.xia-ipsecme-eesp-stateless-encryption] | with group server |
+    +---------------------------------------------+-------------------+
+    | UEC-TSS [UEC-TSS]                           | Unspecified       |
+    +---------------------------------------------+-------------------+
+
+    Table 3: Per-node key storage requirements across keying approaches
+
+5.  Protocol Exchange Details
+
+5.1.  Message Scalability
+
+   In the default DH-derived mode, each pairwise key-derivation
+   transaction requires one request/response round trip for the relayed
+   GKMS_CREATE_CHILD_SA exchange and one additional round trip for the
+   GMV verification-token exchange, plus the forwarding latency through
+   the GKMS.  In the Group-Key-Derived Pairwise Key Mode and the Direct
+   Group Key Mode, SA establishment uses only a single relayed request
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 29]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   and does not require a round trip.
+
+   For each transaction, the GKMS conveys the policy needed for the
+   exchange, including the permitted DH groups and ESP transforms, so
+   that the relayed messages carry only the per-transaction values
+   needed to derive the keys.  An implementation MUST be able to match
+   every response and every verification message to exactly one
+   outstanding transaction.
+
+5.2.  Traffic Selectors with Multiple Network Interfaces
+
+   A node with multiple Network Interface Cards (NICs) or multiple IP
+   addresses may require more than one pair of Traffic Selectors (TSi/
+   TSr) for communication with a given peer.  In conventional IKEv2,
+   introducing an additional protected endpoint can require additional
+   IKE signaling, whether by creating another Child SA, using MOBIKE
+   [RFC4555], or relying on IKE SA Cloning [RFC7791], depending on the
+   deployment.
+
+   In the model specified by this document, the GKMS already distributes
+   group policy and coordinates pairwise SA establishment.  A deployment
+   therefore MAY use the GKMS-distributed policy to authorize and bind
+   additional Traffic Selector state for the affected endpoints, without
+   requiring a full mesh of direct peer-to-peer IKE SAs for each
+   additional interface.  The exact encoding and provisioning of that
+   additional selector state remains a matter of local policy and is not
+   further specified here.
+
+6.  Security Considerations
+
+6.1.  Threat Model
+
+   This document assumes that the GKMS is part of the trusted security
+   boundary of the administrative domain.  The GKMS is trusted to:
+
+   *  authenticate nodes during enrollment,
+
+   *  authorize which pairs of nodes may establish SAs,
+
+   *  distribute the Group Key and current group policy, and
+
+   *  relay GKMS-coordinated control messages without unauthorized
+      modification.
+
+   The GKMS is not trusted with the Diffie-Hellman shared secret and is
+   not expected to derive the DH shared secret or the resulting ESP
+   traffic keying material.  The DH shared secret S is used only during
+   initial SA establishment and is discarded after verification.
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 30]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   A compromised GKMS can still cause significant harm.  In particular,
+   a compromised GKMS can:
+
+   *  authorize unwanted pair establishment,
+
+   *  deny service by dropping, delaying, or modifying relayed control
+      messages,
+
+   *  observe the communication graph of which nodes attempt to
+      establish SAs with each other,
+
+   *  distribute incorrect or malicious policy, and
+
+   *  distribute an incorrect Group Key.
+
+   A compromised GKMS cannot compute the DH shared secret S from
+   recorded control messages alone, because it does not learn that
+   secret.  It also cannot directly derive ESP traffic keying material
+   without S or active participation by a compromised endpoint.
+
+   This document does not attempt to protect against a fully compromised
+   endpoint.  A compromised endpoint can reveal the Group Key or the ESP
+   traffic keying material for SAs in which it participates.  The DH
+   Shared Secret S is used only during initial SA establishment and
+   verification and is not stored persistently.
+
+   The security of this protocol relies on the following additional
+   observations.
+
+   Compromise of the GKMS allows an attacker to participate in group
+   communication and to observe both the relayed exchange metadata and
+   the Group Key, but does not immediately reveal stored ESP keys,
+   because observing the relayed KE payloads is not sufficient to
+   compute the ESP traffic keying material.  This property limits the
+   blast radius of a GKMS compromise compared to schemes in which the
+   key server holds all pairwise keys, such as G-IKEv2 [RFC9838].
+
+   The ESP traffic keying material is derived using HKDF [RFC5869] with
+   the Group Key as salt and the DH shared secret S as IKM during
+   initial SA establishment, and by key chaining thereafter.  HKDF is
+   used instead of a simple XOR for the following reasons:
+
+   *  Limit exposure: after SA establishment, S is discarded and the ESP
+      key is stored rather than the DH secret.  If the Group Key is
+      compromised after a rekey event, the ESP key cannot be recovered
+      from observed traffic, because HKDF is a pseudorandom function.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 31]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   *  Bind the resulting keying material to the specific SA: the ordered
+      identities, SPIs, and nonces are included in the HKDF Info
+      parameter, cryptographically tying the key to the negotiated SA.
+
+   *  Prevent cross-SA key confusion: different SAs between the same
+      peers using different nonces will derive different ESP traffic
+      keys.
+
+   The GKMS-issued nonce N_gkms prevents replay of key-derivation
+   messages.  Without this nonce, an attacker that recorded past
+   GKMS_CREATE_CHILD_SA exchanges could replay them and cause both peers
+   to re-derive the same ESP traffic key.  The nonce-freshness
+   requirement ensures that each derivation is unique.
+
+   The tamper-evidence verification token (HMAC over the DH payloads,
+   under the negotiated integrity algorithm) ensures that, if the GKMS
+   modified any relayed KE payload, the two peers will derive different
+   DH shared secrets and their verification tokens will mismatch,
+   causing SA establishment to abort.  The HMAC key is S itself, which
+   only the Initiator and the Responder know; the GKMS cannot forge
+   verification tokens without also compromising S.  However, if the
+   GKMS is fully compromised and also controls delivery of verification
+   tokens, it could suppress the mismatch by withholding those tokens.
+   Nodes SHOULD implement a timeout on verification-token delivery and
+   abort if that timeout expires, as this may indicate GKMS
+   interference.
+
+   This document does not define a separate explicit key-confirmation
+   exchange for the derived ESP traffic keying material.  Such an
+   exchange would require additional per-pair signaling whenever the
+   Group Key is updated, because the ESP traffic keys depend on both S
+   and the current Group Key.  Instead, this protocol relies on the
+   authenticated GKMS-to-node control channel for Group Key
+   distribution, the tamper-evidence check for the relayed DH exchange,
+   and normal SA failure handling if peers do not derive compatible ESP
+   state.
+
+   Nodes MUST verify that the peer identity carried in the relayed
+   transaction is authorized for the identified group according to the
+   policy and identity bindings distributed by the GKMS during
+   enrollment.  This document relies on the authenticated GKMS-to-node
+   enrollment and policy-distribution channel for those bindings; it
+   does not define a separate peer-certificate exchange within the
+   relayed pairwise-key transaction.  Without such authorization checks,
+   a compromised or buggy GKMS could cause a node to accept an
+   unauthorized peer identity.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 32]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   Forward secrecy with respect to the Group Key is provided through
+   time-based and membership-change-based rekeying using key chaining.
+   Forward secrecy with respect to the DH shared secret is achieved only
+   when both sides perform a fresh DH exchange (see Pairwise Key Refresh
+   for Forward Secrecy (4.7.1)).  The DH shared secret is not stored
+   persistently; it is discarded after initial SA establishment and
+   verification, so the ESP keys for past SAs are not derivable from any
+   long-lived secret.
+
+   The Group-Key-Derived Pairwise Key Mode (empty IKM, see
+   Group-Key-Derived Pairwise Key Mode (4.11)) and the Direct Group Key
+   Mode (4.12) do not provide pairwise key separation and therefore do
+   not limit the impact of a node compromise to a single pairwise
+   relationship.
+
+   The delegated SA deletion mechanism (Delegated SA Deletion (4.9))
+   relies on group rekeying rather than on direct peer-to-peer
+   DeleteNotify exchange.  This avoids giving the GKMS standing
+   credentials to impersonate arbitrary nodes to their peers while still
+   allowing prompt revocation of SAs involving a removed node.
+
+7.  Privacy Considerations
+
+   The GKMS learns the identities of all communicating pairs because it
+   relays the key derivation requests.  As a result, the GKMS can
+   observe at least:
+
+   *  which node is attempting to communicate with which other node,
+
+   *  when a new pairwise transaction is attempted,
+
+   *  how often a given pair performs refresh or rekey operations, and
+
+   *  parts of the communication graph and group structure over time.
+
+   A privacy-sensitive deployment SHOULD avoid sending directly
+   identifying names in GKMS requests when this is not necessary.
+   Instead, it SHOULD use opaque identifiers or identifiers that are
+   only meaningful within the group, so that protocol messages do not
+   directly reveal real-world identities outside that group.  However,
+   even with such identifiers, the GKMS still observes transaction
+   timing and linkage within a group.
+
+   The relayed DH exchange is carried over protected GKMS-to-node
+   control channels established during enrollment, so passive observers
+   of those channels cannot identify the peers without also compromising
+   the GKMS credential store or the protected signaling channel.
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 33]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+   Nodes that use only the Group Key mode remove the secret pairwise-key
+   contribution from the ESP key schedule.  In that mode, the derived
+   ESP keys may still differ across SAs because they remain bound to SA-
+   specific context, but compromise of the shared Group Key affects all
+   such SAs that depend on it.  More generally, any deployment that
+   centralizes SA admission and rekey decisions at the GKMS trades off
+   scalability and operational control against reduced privacy from the
+   GKMS itself.
+
+8.  IANA Considerations
+
+   This section outlines the IANA actions expected for this protocol.
+
+8.1.  IKEv2 Exchange Types
+
+   This document defines a new IKEv2 Exchange Type for IKEv2 [RFC7296]:
+
+        +=======+======================+=========================+
+        | Value | Exchange Type        | Reference               |
+        +=======+======================+=========================+
+        | TBA1  | GKMS_CREATE_CHILD_SA | This document, Exchange |
+        |       |                      | Structure (4.3.3)       |
+        +-------+----------------------+-------------------------+
+
+        Table 4: New IKEv2 exchange type defined by this document
+
+8.2.  IKEv2 Payload Types
+
+   This document defines two new IKEv2 Payload Types for IKEv2
+   [RFC7296]:
+
+         +=======+=========================+====================+
+         | Value | Payload Type            | Reference          |
+         +=======+=========================+====================+
+         | TBA2  | GKMS Coordination (GMS) | This document, GMS |
+         |       |                         | Payload (4.3.4.1)  |
+         +-------+-------------------------+--------------------+
+         | TBA3  | GKMS Verification (GMV) | This document, GMV |
+         |       |                         | Payload (4.3.4.2)  |
+         +-------+-------------------------+--------------------+
+
+             Table 5: New IKEv2 payload types defined by this
+                                 document
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 34]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+8.3.  IKEv2 Notify Message Types
+
+   This document does not define any additional IKEv2 Notify Message
+   Types.  All GKMS-specific operations use the GKMS_CREATE_CHILD_SA
+   exchange type with the GMS and GMV payload types (see The
+   GKMS_CREATE_CHILD_SA Exchange (4.3)).
+
+8.4.  ESP Security Association Attributes
+
+   This document does not currently define new ESP Security Association
+   attributes.  Future extensions may define attributes for carrying
+   GKMS-specific parameters within the ESP SA.
+
+9.  Normative References
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
@@ -361,18 +1934,46 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               RFC 4303, DOI 10.17487/RFC4303, December 2005,
               <https://www.rfc-editor.org/info/rfc4303>.
 
+   [RFC4555]  Eronen, P., "IKEv2 Mobility and Multihoming Protocol
+              (MOBIKE)", RFC 4555, DOI 10.17487/RFC4555, June 2006,
+              <https://www.rfc-editor.org/info/rfc4555>.
+
+   [RFC5869]  Krawczyk, H. and P. Eronen, "HMAC-based Extract-and-Expand
+              Key Derivation Function (HKDF)", RFC 5869,
+              DOI 10.17487/RFC5869, May 2010,
+              <https://www.rfc-editor.org/info/rfc5869>.
+
    [RFC7296]  Kaufman, C., Hoffman, P., Nir, Y., Eronen, P., and T.
               Kivinen, "Internet Key Exchange Protocol Version 2
               (IKEv2)", STD 79, RFC 7296, DOI 10.17487/RFC7296, October
               2014, <https://www.rfc-editor.org/info/rfc7296>.
 
+   [RFC7791]  Migault, D., Ed. and V. Smyslov, "Cloning the IKE Security
+              Association in the Internet Key Exchange Protocol Version
+              2 (IKEv2)", RFC 7791, DOI 10.17487/RFC7791, March 2016,
+              <https://www.rfc-editor.org/info/rfc7791>.
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 35]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/info/rfc8174>.
 
-12.  Informative References
+   [RFC9838]  Smyslov, V. and B. Weis, "Group Key Management Using the
+              Internet Key Exchange Protocol Version 2 (IKEv2)",
+              RFC 9838, DOI 10.17487/RFC9838, November 2025,
+              <https://www.rfc-editor.org/info/rfc9838>.
 
-   [Falcon]   Google, "Google Falcon",
+10.  Informative References
+
+   [Falcon]   "Introduction to Falcon Reliable Transport",
               <https://netdevconf.info/0x18/docs/netdev-0x18-paper43-
               talk-slides/
               Introduction%20to%20Falcon%20Reliable%20Transport.pdf>.
@@ -380,36 +1981,19 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
    [I-D.ietf-ipsecme-eesp]
               Klassert, S., Antony, A., and C. Hopps, "Enhanced
               Encapsulating Security Payload (EESP)", Work in Progress,
-              Internet-Draft, draft-ietf-ipsecme-eesp-01, 3 July 2025,
-              <https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-
-              eesp-01>.
-
-
-
-
-
-
-Antony & Klassert         Expires 11 April 2026                 [Page 7]
-
-Internet-Draft           IKEv2 Key Distribution             October 2025
-
-
-   [I-D.ietf-ipsecme-g-ikev2]
-              Smyslov, V. and B. Weis, "Group Key Management using
-              IKEv2", Work in Progress, Internet-Draft, draft-ietf-
-              ipsecme-g-ikev2-23, 31 July 2025,
-              <https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-
-              g-ikev2-23>.
+              Internet-Draft, draft-ietf-ipsecme-eesp-04, 31 August
+              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              ipsecme-eesp-04>.
 
    [I-D.xia-ipsecme-eesp-stateless-encryption]
-              Xia, L. and W. Jiang, "Stateless Encryption Scheme of
-              Enhanced Encapsulating Security Payload (EESP)", Work in
-              Progress, Internet-Draft, draft-xia-ipsecme-eesp-
-              stateless-encryption-01, 6 July 2025,
+              Xia, L., Jiang, W., and Yue, "Stateless Encryption Profile
+              for Enhanced Encapsulating Security Payload (EESP)", Work
+              in Progress, Internet-Draft, draft-xia-ipsecme-eesp-
+              stateless-encryption-03, 3 July 2026,
               <https://datatracker.ietf.org/doc/html/draft-xia-ipsecme-
-              eesp-stateless-encryption-01>.
+              eesp-stateless-encryption-03>.
 
-   [PSP]      Google, "PSP Architecture Specification",
+   [PSP]      "PSP Architecture Specification",
               <https://github.com/google/psp/blob/main/doc/
               PSP_Arch_Spec.pdf>.
 
@@ -418,19 +2002,91 @@ Internet-Draft           IKEv2 Key Distribution             October 2025
               Security (MLS) Protocol", RFC 9420, DOI 10.17487/RFC9420,
               July 2023, <https://www.rfc-editor.org/info/rfc9420>.
 
-   [RSA-KEY-WRAPING]
-              Google, "Key wrapping",
-              <https://cloud.google.com/kms/docs/key-
-              wrapping#rsaes_oaep_sha_1_2_aes_kwp>.
-
-   [UEC-TSS]  Ultra Ethernet Consortium, "Ultra Ethernet Specification
-              v1.0.1", <https://ultraethernet.org/wp-
+   [UEC-TSS]  "Ultra Ethernet Specification v1.0.1",
+              <https://ultraethernet.org/wp-
               content/uploads/sites/20/2025/10/UE-Specification-
               1.0.1.pdf>.
 
-Appendix A.  Additional Stuff
 
-   TBD
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 36]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+Appendix A.  Example GKMS-Coordinated Exchange
+
+   This appendix illustrates one successful pairwise-key transaction
+   between an Initiator and a Responder.  It omits exact octet values.
+
+   1.  The Initiator selects the Responder, chooses a permitted DH
+       group, generates a fresh Transaction ID, Ni, and KEi, and sends a
+       GKMS_CREATE_CHILD_SA request to the GKMS.
+
+   2.  The GKMS authenticates the Initiator, checks that the Initiator
+       is authorized to communicate with the Responder under the current
+       group policy, allocates transaction state, generates fresh
+       N_gkms, and relays the request toward the Responder with the same
+       Transaction ID and the inserted N_gkms.
+
+   3.  The Responder verifies that the IDg value, Initiator ID,
+       Responder ID, Transaction ID, selected DH group, proposed Traffic
+       Selectors, and N_gkms are acceptable under the GKMS-distributed
+       policy.  The Responder generates Nr and KEr and sends a
+       GKMS_CREATE_CHILD_SA response back to the GKMS.
+
+   4.  The GKMS verifies that the response matches stored transaction
+       state, including the Transaction ID and N_gkms value, and relays
+       the response to the Initiator.
+
+   5.  The Initiator and the Responder compute the DH shared secret S
+       and derive the ESP traffic keying material directly from S and
+       the Group Key as described in Exchange Processing (4.3.6).
+
+   6.  The Initiator computes a tamper-evidence verification token and
+       sends it through the GKMS in a GMV payload.  The Responder does
+       the same in the reverse direction.
+
+   7.  The Initiator and the Responder verify the received tamper-
+       evidence tokens.  If either token mismatches, both sides abort
+       the transaction.
+
+   8.  If the tamper-evidence tokens validate, the Initiator and the
+       Responder install the resulting ESP SA state and begin using the
+       derived ESP Traffic Keying Material for data traffic.
+
+   9.  The GKMS may discard the transaction state after the expected
+       verification messages have been relayed or after the local
+       transaction lifetime expires.
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 37]
+
+Internet-Draft   IKEv2 Group-Assisted Key Establishment   September 2026
+
+
+Appendix B.  Open Issues
+
+   This section records open issues that require resolution in a future
+   revision of this document.
+
+   1.  *Atomic rekey*: The design of an atomic rekey mechanism to
+       prevent race conditions during group membership changes is open.
+       See the note in Removing a Member (4.6).
+
+Appendix C.  Acknowledgments
+
+   The authors thank the members of the IPsecME Working Group for their
+   review and discussion of this work.
 
 Authors' Addresses
 
@@ -445,4 +2101,28 @@ Authors' Addresses
 
 
 
-Antony & Klassert         Expires 11 April 2026                 [Page 8]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Antony & Klassert         Expires 12 March 2027                [Page 38]
